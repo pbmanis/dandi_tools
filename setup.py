@@ -12,9 +12,9 @@ Support::
 Paul B. Manis, 2022
 """
 
-version = '0.9.3'
+version = '0.1.1'
 
-setup(name='vcnmodel',
+setup(name='dandi_tools',
       version=version,
       description='Dandi/NWB tools ',
       url='http://github.com/pbmanis/dandi_tools',
@@ -40,10 +40,10 @@ setup(name='vcnmodel',
                ],
       },
       classifiers = [
-             "Programming Language :: Python :: 3.6+",
+             "Programming Language :: Python :: 3.9+",
              "Development Status ::  Beta",
              "Environment :: Console",
-             "Intended Audience :: Manis Lab",
+             "Intended Audience :: Manis/Kato Labs",
              "License :: MIT",
              "Operating System :: OS Independent",
              "Topic :: Software Development :: Tools :: Python Modules",

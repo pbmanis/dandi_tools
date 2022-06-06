@@ -1,6 +1,8 @@
-Dandi tools for posting data to the Dandi Archive
+Dandi tools for posting data to the Dandi Archive.
 
-Test for NWB form correctnexx
+Convert from acq4 to NWB
+
+Test for NWB form correctness
 
 see: https://www.dandiarchive.org/handbook/10_using_dandi/
 
