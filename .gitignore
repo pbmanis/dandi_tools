@@ -1,12 +1,13 @@
 # special directories that we don't want to track
-ForGeorge/ # files that are for George Spirou
-MorphologyData/  # misc morphology data not necessarily related to the project
-dandi_venv/ # virtual environment
+# virtual environment
+
+dandi_venv/
+
 toml/archived
 scripts/Archived
-nb/*.html
-nb/*.nwb
-nb/*.jl
+
+# jupyter lab files
+jupyter-nwb/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
