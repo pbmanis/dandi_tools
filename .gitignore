@@ -2,10 +2,6 @@
 # virtual environment
 
 dandi_venv/
-
-toml/archived
-scripts/Archived
-
 # jupyter lab files
 jupyter-nwb/
 
@@ -161,6 +157,8 @@ venv.bak/
 
 # mypy
 .mypy_cache/
-vcnmodel/analyzers/sac_cython.c
-vcnmodel/analyzers/sttc_cython.c
-docs/vcnmodel.rstx
+
+dandi_tools.egg-info
+dandi_venv/bin
+dandi_venv/share
+dandi_venv/pyvenv.cfg
