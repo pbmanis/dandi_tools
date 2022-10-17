@@ -2,6 +2,7 @@
 # virtual environment
 
 dandi_venv/
+
 # jupyter lab files
 jupyter-nwb/
 
