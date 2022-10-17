@@ -260,7 +260,7 @@ class ACQ4toNWB:
         nwbfile.add_ic_electrode(elec)  # not well documented!
 
         protoname = protocolname.name
-        ccseries_description = ""
+        ccseries_description = None
         if protoname.startswith("CCIV"):
             ccseries_description = "Current Clamp IV series"
         elif protoname.startswith("Ic_LED"):
@@ -268,80 +268,80 @@ class ACQ4toNWB:
         elif protoname.startswith("Map_NewBlueLaser_IC"):
             ccseries_description = "Current Clamp with Laser scanning photostimulation"
         print("ccseries: ", ccseries_description)
+        if ccseries_description is not None:
+            istim1 = NWB.icephys.CurrentClampStimulusSeries(
+                name="Ics1",
+                description = ccseries_description,
+                data=np.array(AR.cmd_wave).T,
+                unit="amperes",
+                starting_time=info["__timestamp__"],
+                rate=sample_rate[0],
+                electrode=elec,
+                gain=1.0,
+                sweep_number=np.uint32(1),
+            )
 
-        istim1 = NWB.icephys.CurrentClampStimulusSeries(
-            name="Ics1",
-            description = ccseries_description,
-            data=np.array(AR.cmd_wave).T,
-            unit="amperes",
-            starting_time=info["__timestamp__"],
-            rate=sample_rate[0],
-            electrode=elec,
-            gain=1.0,
-            sweep_number=np.uint(1),
-        )
+            vdata1 = NWB.icephys.CurrentClampSeries(
+                "Vcs1",
+                description = ccseries_description,
+                data=AR.data_array.T,
+                unit="volts",
+                electrode=elec,
+                gain=1.0,
+                bias_current=0.0,
+                bridge_balance=0.0,
+                capacitance_compensation=0.0,
+                stimulus_description="NA",
+                resolution=np.NaN,
+                conversion=1.0,
+                timestamps=None,
+                starting_time=info["__timestamp__"],
+                rate=AR.sample_rate[0],
+                comments="no comments",
+                control=None,
+                control_description=None,
+                sweep_number=np.uint(1),
+            )
 
-        vdata1 = NWB.icephys.CurrentClampSeries(
-            "Vcs1",
-            description = ccseries_description,
-            data=AR.data_array.T,
-            unit="volts",
-            electrode=elec,
-            gain=1.0,
-            bias_current=0.0,
-            bridge_balance=0.0,
-            capacitance_compensation=0.0,
-            stimulus_description="NA",
-            resolution=np.NaN,
-            conversion=1.0,
-            timestamps=None,
-            starting_time=info["__timestamp__"],
-            rate=AR.sample_rate[0],
-            comments="no comments",
-            control=None,
-            control_description=None,
-            sweep_number=np.uint(1),
-        )
+            # AR.setDataName("MultiClamp2.ma")
+            dataok = AR.getData()
+            vdata2 = NWB.icephys.CurrentClampSeries(
+                "Vcs2",
+                data=AR.data_array.T,
+                unit="volts",
+                electrode=elec,
+                gain=1.0,
+                bias_current=0.0,
+                bridge_balance=0.0,
+                capacitance_compensation=0.0,
+                stimulus_description="NA",
+                resolution=np.NaN,
+                conversion=1.0,
+                timestamps=None,
+                starting_time=info["__timestamp__"],
+                rate=AR.sample_rate[0],
+                comments="no comments",
+                description=ccseries_description,
+                control=None,
+                control_description=None,
+                sweep_number=np.uint32(1),
+            )
+            istim2 = NWB.icephys.CurrentClampStimulusSeries(
+                name="Ics2",
+                description=ccseries_description,
+                data=np.array(AR.cmd_wave).T,
+                unit="amperes",
+                starting_time=info["__timestamp__"],
+                rate=AR.sample_rate[0],
+                electrode=elec,
+                gain=1.0,
+                sweep_number=np.uint32(1),
+            )
 
-        # AR.setDataName("MultiClamp2.ma")
-        dataok = AR.getData()
-        vdata2 = NWB.icephys.CurrentClampSeries(
-            "Vcs2",
-            data=AR.data_array.T,
-            unit="volts",
-            electrode=elec,
-            gain=1.0,
-            bias_current=0.0,
-            bridge_balance=0.0,
-            capacitance_compensation=0.0,
-            stimulus_description="NA",
-            resolution=np.NaN,
-            conversion=1.0,
-            timestamps=None,
-            starting_time=info["__timestamp__"],
-            rate=AR.sample_rate[0],
-            comments="no comments",
-            description=ccseries_description,
-            control=None,
-            control_description=None,
-            sweep_number=np.uint(1),
-        )
-        istim2 = NWB.icephys.CurrentClampStimulusSeries(
-            name="Ics2",
-            description=ccseries_description,
-            data=np.array(AR.cmd_wave).T,
-            unit="amperes",
-            starting_time=info["__timestamp__"],
-            rate=AR.sample_rate[0],
-            electrode=elec,
-            gain=1.0,
-            sweep_number=np.uint(1),
-        )
-
-        nwbfile.add_acquisition(istim1)
-        nwbfile.add_acquisition(vdata1)
-        nwbfile.add_acquisition(istim2)
-        nwbfile.add_acquisition(vdata2)
+            nwbfile.add_acquisition(istim1)
+            nwbfile.add_acquisition(vdata1)
+            nwbfile.add_acquisition(istim2)
+            nwbfile.add_acquisition(vdata2)
 
         outfile = Path(self.out_file_path, outfilename)
         print(f"writing to: {str(outfile)+'.nwb':s}")
