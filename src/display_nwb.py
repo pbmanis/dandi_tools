@@ -69,8 +69,12 @@ class ReadNWB():
             IVS.plot_mode(mode="normal")
             IVS.compute_iv()
         elif self.EPC.mode == "VC":
-            VCS = EP.VCTraceplot.VCTraceplot(datapath=None, altstruct=self.EPC, file=f)
-            VCS.plot_vc()
+            if self.protocol.startswith("VCIV"):
+                VCS = EP.VCSummary.VCSummary(datapath=None, altstruct=self.EPC, file=f)
+                VCS.compute_iv()
+            else: # just plot traces
+                VCS = EP.VCTraceplot.VCTraceplot(datapath=None, altstruct=self.EPC, file=f)
+                VCS.plot_vc()
             
         # IVS.plot_iv()
 

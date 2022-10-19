@@ -487,5 +487,6 @@ def ConvertFile(filename:Union[str, Path], outputpath:str="test_data", device='M
 if __name__ == "__main__":
 #    f = Path('/Volumes/Pegasus/ManisLab_Data3/Kasten_Michael/NF107Ai32_Het/2017.05.01_000/slice_000/cell_000/CCIV_short_000')
     # f = Path('/Volumes/Pegasus_002/ManisLab_Data3/Kasten_Michael/HK_collab_ICinj/Thalamocortical/2022.10.10_000/slice_001/cell_000/CCIV_long_000')
-    f = Path('/Volumes/Pegasus_002/ManisLab_Data3/Kasten_Michael/2017.02.23_000/slice_000/cell_000/Map_NewBlueLaser_VC_single_MAX_005')
+    # f = Path('/Volumes/Pegasus_002/ManisLab_Data3/Kasten_Michael/2017.02.23_000/slice_000/cell_000/Map_NewBlueLaser_VC_single_MAX_005')
+    f = Path('/Volumes/Pegasus_002/ManisLab_Data3/Kasten_Michael/NF107Ai32_Het/2019.04.16_000/slice_002/cell_000/VCIV_simple_001')
     ConvertFile(filename=f, mode="VC")
