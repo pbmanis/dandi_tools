@@ -78,16 +78,14 @@ Distributed under MIT/X11 license. See license.txt for more infomation.
 import datetime
 from dataclasses import dataclass
 from pathlib import Path, PurePath
-from typing import Union
+from typing import Union, Literal
 
 import ephys.ephysanalysis as EP
 import numpy as np
-from dateutil.tz import tzlocal
-from nwbinspector import inspect_all, inspect_nwb
-
-AR = EP.acq4read.Acq4Read()
 import pynwb as NWB
+from dateutil.tz import tzlocal
 from ephys.ephysanalysis import MatdatacRead as MDR
+from nwbinspector import inspect_all, inspect_nwb
 
 
 @dataclass
@@ -105,9 +103,10 @@ class ExperimentInfo:
 
 class ACQ4toNWB:
     def __init__(self, out_file_path: Union[str, Path, None] = None):
+        self.AR = EP.acq4read.Acq4Read() # get acq4 reader
+
         self.out_file_path = out_file_path
         self.set_data_name("MultiClamp1.ma")
-
 
 
     def _get_slice_cell(self, f: Union[str, Path, None] = None):
@@ -143,7 +142,7 @@ class ACQ4toNWB:
         return foname
 
     def set_data_name(self, datatype:str):
-        AR.setDataName("MultiClamp1.ma")
+        self.AR.setDataName("MultiClamp1.ma")
 
     def ISO8601_age(self, agestr):
         """Convert somewhat random age designators to ISO standard, e.g.:
@@ -156,54 +155,64 @@ class ACQ4toNWB:
         Returns:
             str: sanitized age string
         """
+
         agestr = agestr.replace('p', 'P')
         agestr = agestr.replace('d', 'D')
         if 'P' not in agestr:
             agestr = 'P' + agestr
         if 'D' not in agestr:
             agestr = agestr + "D"
+        if agestr == "PD":
+            agestr = "P9999D"  # no age specified
         return agestr
 
 
-    def acq4tonwb(self, protocolname, outfilename: Union[Path, str, None] = None):
+    def acq4tonwb(self, protocolname, outfilename: Union[Path, str, None] = None,
+            recordingmode:Literal["CC", "VC", "I=0"]="CC"):
         print("datafile: ", protocolname, protocolname.is_dir())
         if outfilename is None:
             outfilename = self._get_short_name(protocolname)
         print("Out file: ", outfilename)
 
-        AR.setProtocol(protocolname)
-        dataok = AR.getData()
-        sample_rate = AR.sample_rate
+        self.AR.setProtocol(protocolname)
+        dataok = self.AR.getData()
 
         if not dataok:
             return
-        info = AR.readDirIndex(currdir=protocolname.parent.parent.parent)["."]
-        slice_index = AR.readDirIndex(currdir=protocolname.parent.parent)["."]
-        cell_index = AR.readDirIndex(currdir=protocolname.parent)["."]
-        proto_index = AR.readDirIndex(currdir=protocolname)["."]
-
-        # print(cell_index.keys())
-        # #     print(proto_index)
-        # print(info["temperature"], info["sex"], info["age"])
-        # print(info.keys())
-
+        info = self.AR.readDirIndex(currdir=protocolname.parent.parent.parent)["."]
+        slice_index = self.AR.readDirIndex(currdir=protocolname.parent.parent)["."]
+        cell_index = self.AR.readDirIndex(currdir=protocolname.parent)["."]
+        proto_index = self.AR.readDirIndex(currdir=protocolname)["."]
         #
-        # data in AR.data_array, AR.time_base, stimuli in AR.cmd_wave
+        # data in self.AR.data_array, self.AR.time_base, stimuli in self.AR.cmd_wave
         data_date = datetime.date.fromtimestamp(info["__timestamp__"])
-        age = int(
+        try:
+            age = int(
             info["age"]
             .replace("p", "")
             .replace("P", "")
             .replace("~", "")
             .replace("+", "")
-        )
-        dob = datetime.datetime.combine(
-            data_date - datetime.timedelta(days=age), datetime.time()
-        )
-        dobstr = dob.strftime("%d/%m/%Y%Z")
-        species = info["species"]
-        if "mouse" in species or "Mouse" in species:
-            species = 'Mus musculus'
+            )
+        except:
+            age = None
+        if "sex" not in info.keys() or info["sex"] == "":
+            info["sex"] = "U"
+        else:
+            info["sex"] = info["sex"].upper()
+        if "weight" not in info.keys():
+            info["weight"] = None
+        if "species" not in info.keys() or info["species"] == "":
+            info["species"] = 'Mus musculus'
+        if age is not None:
+                dob = datetime.datetime.combine(
+                data_date - datetime.timedelta(days=age), datetime.time()
+            )
+            # dobstr = dob.strftime("%d/%m/%Y%Z")
+        else:
+            dob = None
+        if "mouse" in info["species"] or "Mouse" in info["species"]:
+            info["species"] = 'Mus musculus'
         subject_id = info['animal identifier']
         if subject_id is None or subject_id == "":
             dset = Path(protocolname).parts
@@ -213,8 +222,8 @@ class ACQ4toNWB:
             age=self.ISO8601_age(info["age"]),
             description=info["strain"],
             genotype=info["genotype"],
-            sex=info["sex"].upper(),
-            species=species,
+            sex=info["sex"],
+            species=info["species"],
             subject_id=subject_id,
             weight=info["weight"],
             date_of_birth=dob,
@@ -228,8 +237,9 @@ class ACQ4toNWB:
         
         if "notes" not in info.keys():
             info['notes'] = "  No Notes"
-        nwbfile = NWB.NWBFile(
-            session_start_time=datetime.datetime.fromtimestamp(info['__timestamp__']),
+
+        self.NWBFile = NWB.NWBFile(
+            session_start_time=datetime.datetime.fromtimestamp(info['__timestamp__'], tz=tzlocal()),
             session_id=f"{0:d}",
             session_description=info['description'],
             keywords=["mouse", "intracellular recording", "channelrhodopsins", "pathway tracing",
@@ -247,11 +257,101 @@ class ACQ4toNWB:
             subject=subject,
         )
         device = NWB.device.Device("MC700B", "Current and Voltage clamp amplifier", "Axon Instruments (Molecular Devices)")
-        nwbfile.add_device(device)
+        self.NWBFile.add_device(device)
+
+        if recordingmode == "CC":
+            self.get_CC_data(protocolname=protocolname, info=info, device=device)
+        elif recordingmode == "VC":
+            self.get_VC_data(protocolname=protocolname, info=info, device=device)
+        else:
+            print(f"Recording mode {recordingmode:s} is not implemented yet")
+            return None
+        outfile = Path("test_data", str(outfilename) + ".nwb")
+        print(f"writing to: {str(outfile):s}")
+        with NWB.NWBHDF5IO(str(outfile), "w") as io:
+            io.write(self.NWBFile)
+        return outfile
+
+    def get_one_CC_recording(self, ccseries:str, 
+            protocolname:Path,
+            info:dict, device:NWB.device,
+            acq4_source_name:str="MultiClamp1.ma",
+            electrode:int=1):
+        
+        self.AR.setDataName(acq4_source_name)
+        print(f"\nLooking for a recordings from {acq4_source_name:s}")
+        dataok = self.AR.getData(check=True)
+        if not dataok:
+            print("   source not found, skipping")
+            return
+        self.AR.getData()
         slicen, cell = self._get_slice_cell(f=protocolname)
+        s = []
+        for d in self.AR.clampInfo['dirs']:
+            datainfo = self.AR.getDataInfo(Path(d, self.AR.dataname))
+            # print('datainfo: ', datainfo, "\n")
+            # s.append(AR.getStim(Path(d, self.AR.dataname)))
 
+        elec1 = NWB.icephys.IntracellularElectrode(
+            name = f"elec{electrode:d}",
+            description="Sutter 1.5 mm patch as intracellular electrode",
+            cell_id = f"{slicen:s}_{cell:s}",
+            filtering = str(datainfo[1]['ClampState']['ClampParams']['PrimarySignalLPF']),
+            device=device,
+        )
+        self.NWBFile.add_icephys_electrode(elec1)  # not well documented!
+        
+        step_times = [np.uint64(self.AR.tstart*self.AR.samp_rate), np.uint64(self.AR.tend*self.AR.samp_rate)]
+        istim = NWB.icephys.CurrentClampStimulusSeries(
+            name = f"Ics{electrode:d}",
+            stimulus_description = str(self.AR.protocol.name),
+            description = "control values are the current injection step times in seconds",
+            control = step_times,
+            control_description = ["tstart", "tend"],
+            comments = "CC",
+            data = np.array(self.AR.cmd_wave).T,
+            unit = "amperes",
+            starting_time = info["__timestamp__"],
+            rate = self.AR.sample_rate[0],
+            electrode = elec1,
+            gain = datainfo[1]['ClampState']['extCmdScale'],
+            sweep_number = np.uint32(1),
+        )
 
+        vdata = NWB.icephys.CurrentClampSeries(
+            name = "Vcs1",
+            description = ccseries,
+            data = self.AR.data_array.T,
+            unit = "volts",
+            electrode = elec1,
+            gain = datainfo[1]['ClampState']['primaryGain'],
+            bias_current = datainfo[1]['ClampState']['ClampParams']['Holding'],
+            bridge_balance = datainfo[1]['ClampState']['ClampParams']['BridgeBalResist'],
+            capacitance_compensation = datainfo[1]['ClampState']['ClampParams']['NeutralizationCap'],
+            stimulus_description = "Current Steps",
+            resolution = np.NaN,
+            conversion = 1.0,
+            timestamps = None,
+            starting_time = info["__timestamp__"],
+            rate = self.AR.sample_rate[0],
+            comments = "CC",
+            control = None,
+            control_description = None,
+            sweep_number = np.uint(1),
+        )
+        self.NWBFile.add_acquisition(istim)
+        self.NWBFile.add_acquisition(vdata)
 
+    def get_CC_data(self, protocolname:Path, info:dict, device:NWB.device):
+        """Check if a protocol is a one of our known
+        current-clamp protocols, and if so, put the data into the
+        NWB format
+
+        This adds the cc protocol information directly to the self.NWBFile object.
+
+        Returns:
+            Nothing
+        """
         protoname = protocolname.name
         ccseries_description = None
         if protoname.startswith("CCIV"):
@@ -260,128 +360,124 @@ class ACQ4toNWB:
             ccseries_description = "Current Clamp with LED Illumination for optical stimulation"
         elif protoname.startswith("Map_NewBlueLaser_IC"):
             ccseries_description = "Current Clamp with Laser scanning photostimulation"
+        if ccseries_description is None:
+            return None
+        for ampchannel in [1,2]:
+            self.get_one_CC_recording(protocolname=protocolname,
+                ccseries=ccseries_description,
+                info=info, 
+                device = device, 
+                acq4_source_name=f"MultiClamp{ampchannel:d}.ma",
+                electrode = ampchannel)
 
-        if ccseries_description is not None:
-            s = []
-            for d in AR.clampInfo['dirs']:
-                datainfo = AR.getDataInfo(Path(d, AR.dataname))
-                # print('datainfo: ', datainfo, "\n")
-                # s.append(AR.getStim(Path(d, AR.dataname)))
-
-            elec1 = NWB.icephys.IntracellularElectrode(
-                name="elec1",
-                description="Sutter 1.5 mm patch as intracellular electrode",
-                cell_id = f"{slicen:s}_{cell:s}",
-                filtering = str(datainfo[1]['ClampState']['ClampParams']['PrimarySignalLPF']),
-                device=device,
-            )
-            nwbfile.add_icephys_electrode(elec1)  # not well documented!
-            
-            step_times = [int(AR.tstart*AR.samp_rate), int(AR.tend*AR.samp_rate)]
-            istim1 = NWB.icephys.CurrentClampStimulusSeries(
-                name="Ics1",
-                stimulus_description = str(AR.protocol.name),
-                description = "control values are the current injection step times in seconds",
-                control=step_times,
-                control_description=["tstart", "tend"],
-                comments = ccseries_description,
-                data=np.array(AR.cmd_wave).T,
-                unit="amperes",
-                starting_time=info["__timestamp__"],
-                rate=sample_rate[0],
-                electrode=elec1,
-                gain=1.0,
-                sweep_number=np.uint32(1),
-            )
  
-            vdata1 = NWB.icephys.CurrentClampSeries(
-                "Vcs1",
-                description = ccseries_description,
-                data=AR.data_array.T,
-                unit="volts",
-                electrode=elec1,
-                gain=1.0,
-                bias_current=datainfo[1]['ClampState']['ClampParams']['Holding'],
-                bridge_balance=datainfo[1]['ClampState']['ClampParams']['BridgeBalResist'],
-                capacitance_compensation=datainfo[1]['ClampState']['ClampParams']['NeutralizationCap'],
-                stimulus_description="NA",
-                resolution=np.NaN,
-                conversion=1.0,
-                timestamps=None,
-                starting_time=info["__timestamp__"],
-                rate=AR.sample_rate[0],
-                comments="no comments",
-                control=None,
-                control_description=None,
-                sweep_number=np.uint(1),
-            )
-            nwbfile.add_acquisition(istim1)
-            nwbfile.add_acquisition(vdata1)
+    def get_one_VC_recording(self, vcseries:str, 
+            protocolname:Path,
+            info:dict, device:NWB.device,
+            acq4_source_name:str="MultiClamp1.ma",
+            electrode:int=1):
 
-            AR.setDataName("MultiClamp2.ma")
-            print("\nLooking for a second voltage channel")
-            dataok = AR.getData(check=True)
-            if not dataok:
-                print("... not found, skipping")
-            else:
-                elec2 = NWB.icephys.IntracellularElectrode(
-                    name="elec2",
-                    description="Sutter 1.5 mm patch as intracellular electrode",
-                    cell_id = f"{slicen:s}_{cell:s}",
-                    filtering = str(datainfo[1]['ClampState']['LPFCutoff']),
-                    device=device,
-                )
-                
-                nwbfile.add_icephys_electrode(elec2)  # not well documented!
-                vdata2 = NWB.icephys.CurrentClampSeries(
-                        "Vcs2",
-                    data=AR.data_array.T,
-                    unit="volts",
-                    electrode=elec2,
-                    gain=1.0,
-                    bias_current=0.0,
-                    bridge_balance=0.0,
-                    capacitance_compensation=0.0,
-                    stimulus_description="NA",
-                    resolution=np.NaN,
-                    conversion=1.0,
-                    timestamps=None,
-                    starting_time=info["__timestamp__"],
-                    rate=AR.sample_rate[0],
-                    comments="no comments",
-                    description=ccseries_description,
-                    control=None,
-                    control_description=None,
-                    sweep_number=np.uint32(1),
-                )
-                istim2 = NWB.icephys.CurrentClampStimulusSeries(
-                    name="Ics2",
-                    description=ccseries_description,
-                    data=np.array(AR.cmd_wave).T,
-                    unit="amperes",
-                    starting_time=info["__timestamp__"],
-                    rate=AR.sample_rate[0],
-                    electrode=elec2,
-                    gain=1.0,
-                    sweep_number=np.uint32(1),
-                )
 
-                nwbfile.add_acquisition(istim2)
-                nwbfile.add_acquisition(vdata2)
+        slicen, cell = self._get_slice_cell(f=protocolname)
+        s = []
+        for d in self.AR.clampInfo['dirs']:
+            datainfo = self.AR.getDataInfo(Path(d, self.AR.dataname))
+            # print('datainfo: ', datainfo, "\n")
+            # s.append(AR.getStim(Path(d, self.AR.dataname)))
 
-        outfile = Path(self.out_file_path, outfilename)
-        outfile = Path(str(outfile) + ".nwb")
-        print(f"writing to: {str(outfile):s}")
-        with NWB.NWBHDF5IO(str(outfile), "w") as io:
-            io.write(nwbfile)
-        return outfile
+        elec = NWB.icephys.IntracellularElectrode(
+            name=f"elec{electrode:d}",
+            description="Sutter 1.5 mm patch as intracellular electrode",
+            cell_id = f"{slicen:s}_{cell:s}",
+            filtering = str(datainfo[1]['ClampState']['ClampParams']['PrimarySignalLPF']),
+            device=device,
+        )
+        self.NWBFile.add_icephys_electrode(elec)  # not well documented!
+        
+        step_times = [np.int64(self.AR.tstart*self.AR.samp_rate), np.int64(self.AR.tend*self.AR.samp_rate)]
+        vstim = NWB.icephys.VoltageClampStimulusSeries(
+            name = f"Vcs{electrode:d}",
+            stimulus_description = str(self.AR.protocol.name),
+            description = vcseries,
+            control = step_times,
+            control_description = ["tstart", "tend"],
+            comments = "VC",
+            data = np.array(self.AR.cmd_wave).T,
+            unit = "volts",
+            starting_time = info["__timestamp__"],
+            rate=self.AR.sample_rate[0],
+            electrode = elec,
+            gain = datainfo[1]['ClampState']['extCmdScale'],
+            sweep_number = np.uint32(1),
+        )
+        cparams = datainfo[1]['ClampState']['ClampParams']
 
-def ConvertFile(filename:Union[str, Path], outputpath:str="test_data", device='MultiClamp1.ma'):
+        idata = NWB.icephys.VoltageClampSeries(
+            name=f"Ics{electrode:d}",
+            description = vcseries,
+            data = self.AR.data_array.T,
+            unit = "amperes",
+            electrode = elec,
+            gain = datainfo[1]['ClampState']['primaryGain'],
+            stimulus_description=str(protocolname.name),
+            capacitance_fast = cparams['FastCompCap'],
+            capacitance_slow = cparams['SlowCompCap'],
+            resistance_comp_bandwidth = cparams['RsCompBandwidth'],
+            resistance_comp_correction = cparams['RsCompCorrection'],
+            resistance_comp_prediction = 0., # not recorded in acq4, we rarely use this.
+            whole_cell_capacitance_comp = cparams['WholeCellCompCap'],
+            whole_cell_series_resistance_comp = cparams['WholeCellCompResist'],
+            resolution=np.NaN,
+            conversion=1.0,
+            timestamps=None,
+            starting_time=info["__timestamp__"],
+            rate=self.AR.sample_rate[0],
+            comments="VC",
+            control=None,
+            control_description=None,
+            sweep_number=np.uint(1),
+            offset = datainfo[1]['ClampState']['holding']
+        )
+        self.NWBFile.add_acquisition(vstim)
+        self.NWBFile.add_acquisition(idata)
+    
+    def get_VC_data(self, protocolname:Path, info:dict, device:NWB.device):
+        """Check if a protocol is a one of our known
+        voltage-clamp protocols, and if so, put the data into the
+        NWB format
+
+        This adds the vc protocol information directly to the self.NWBFile object.
+
+        Returns:
+            Nothing
+        """
+        protoname = protocolname.name
+        print('protoname')
+        vcseries_description = None
+        if protoname.startswith("VCIV"):
+            vcseries_description = "Voltage Clamp series"
+        elif protoname.startswith("Vc_LED"):
+            vcseries_description = "Voltage Clamp with LED Illumination for optical stimulation"
+        elif protoname.startswith("Map_NewBlueLaser_VC"):
+            vcseries_description = "Voltage Clamp with Laser scanning photostimulation"
+        if vcseries_description is None:
+            return None
+        print("vcseries_description: ", vcseries_description)
+
+        for ampchannel in [1,2]:
+            self.get_one_VC_recording(vcseries=vcseries_description, 
+                protocolname=protocolname,
+                info=info, device=device,
+                acq4_source_name=f"MultiClamp{ampchannel:d}.ma",
+                electrode=ampchannel)
+
+
+def ConvertFile(filename:Union[str, Path], outputpath:str="test_data", device='MultiClamp1.ma', mode="CC"):
     A2N = ACQ4toNWB(outputpath)
     A2N.set_data_name(device)
-    nwbfile = A2N.acq4tonwb(f)
-    print("Nwb file generated: ", nwbfile)
-    results = list(inspect_all(path=nwbfile))
+    NWBFile = A2N.acq4tonwb(f, recordingmode=mode)
+    print("Nwb file generated: ", NWBFile)
+    results = list(inspect_all(path=NWBFile))
     if len(results) == 0:
         print("Conversion OK")
     else:
@@ -390,5 +486,6 @@ def ConvertFile(filename:Union[str, Path], outputpath:str="test_data", device='M
 
 if __name__ == "__main__":
 #    f = Path('/Volumes/Pegasus/ManisLab_Data3/Kasten_Michael/NF107Ai32_Het/2017.05.01_000/slice_000/cell_000/CCIV_short_000')
-    f = Path('/Volumes/Pegasus_002/ManisLab_Data3/Kasten_Michael/HK_collab_ICinj/Thalamocortical/2022.10.10_000/slice_001/cell_000/CCIV_long_000')
-    ConvertFile(filename=f)
+    # f = Path('/Volumes/Pegasus_002/ManisLab_Data3/Kasten_Michael/HK_collab_ICinj/Thalamocortical/2022.10.10_000/slice_001/cell_000/CCIV_long_000')
+    f = Path('/Volumes/Pegasus_002/ManisLab_Data3/Kasten_Michael/2017.02.23_000/slice_000/cell_000/Map_NewBlueLaser_VC_single_MAX_005')
+    ConvertFile(filename=f, mode="VC")

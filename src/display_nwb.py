@@ -41,21 +41,37 @@ class ReadNWB():
         nwbfile = io.read()
         di = nwbfile.get_intracellular_recordings()
 
-        self.istim = nwbfile.acquisition['Ics1'].data[:]
-        self.vresp = nwbfile.acquisition['Vcs1'].data[:]
+        recmode = nwbfile.acquisition['Ics1'].comments
+
+        if recmode == 'CC':  # get command and response data .. 
+            self.cmd = nwbfile.acquisition['Ics1'].data[:]
+            self.resp = nwbfile.acquisition['Vcs1'].data[:]
+        elif recmode == 'VC':
+            self.resp = nwbfile.acquisition['Ics1'].data[:]
+            self.cmd = nwbfile.acquisition['Vcs1'].data[:]
+            
         self.sample_rate = nwbfile.acquisition['Vcs1'].rate  # data sample rate in Hz
         self.protocol = nwbfile.protocol
-        self.time = np.linspace(0., self.vresp.shape[0]/self.sample_rate, self.vresp.shape[0])
+        self.time = np.linspace(0., self.resp.shape[0]/self.sample_rate, self.resp.shape[0])
         # make an ephys Clamps structure
         self.EPC = EP.MakeClamps.MakeClamps()
-        self.EPC.set_clamps(self.time, self.vresp, cmddata = self.istim, tstart_tdur=[0.1, 0.1], protocol=self.protocol)
+        self.EPC.set_clamps(self.time, self.resp, 
+            cmddata = self.cmd, 
+            tstart_tdur=[0.1, 0.1], 
+            protocol=self.protocol,
+            dmode=recmode)
         self.EPC.setNWB(nwbmode=True, nwbfile=nwbfile)
 
         self.EPC.getClampData()
-        IVS = EP.IVSummary.IVSummary(datapath = None, altstruct=self.EPC, file=f)
-        IVS.plot_mode(mode="normal")
-        IVS.compute_iv()
 
+        if self.EPC.mode == "CC":
+            IVS = EP.IVSummary.IVSummary(datapath = None, altstruct=self.EPC, file=f)
+            IVS.plot_mode(mode="normal")
+            IVS.compute_iv()
+        elif self.EPC.mode == "VC":
+            VCS = EP.VCTraceplot.VCTraceplot(datapath=None, altstruct=self.EPC, file=f)
+            VCS.plot_vc()
+            
         # IVS.plot_iv()
 
 
