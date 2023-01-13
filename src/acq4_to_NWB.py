@@ -76,24 +76,27 @@ Distributed under MIT/X11 license. See license.txt for more infomation.
 
 """
 import datetime
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path, PurePath
 from typing import Union, Literal
-
-import ephys.ephysanalysis as EP
+import uuid
+import ephys.ephys_analysis as EP
+import ephys.datareaders as DR
 import numpy as np
 import pynwb as NWB
 from dateutil.tz import tzlocal
-from ephys.ephysanalysis import MatdatacRead as MDR
+from ephys.datareaders import matdatac_reader as MDR
 from nwbinspector import inspect_all, inspect_nwb
 
+def def_lister():
+    return []
 
 @dataclass
 class ExperimentInfo:
     description: str = ""
     protocol: str = ""
     time: str = ""
-    experimenters: str = ""
+    experimenters: list = field(default_factory=def_lister) 
     lab: str = ""
     institution: str = "UNC Chapel Hill"
     experiment_description: str = ""
@@ -103,7 +106,7 @@ class ExperimentInfo:
 
 class ACQ4toNWB:
     def __init__(self, out_file_path: Union[str, Path, None] = None):
-        self.AR = EP.acq4read.Acq4Read() # get acq4 reader
+        self.AR = DR.acq4_reader.acq4_reader() # get acq4 reader
 
         self.out_file_path = out_file_path
         self.set_data_name("MultiClamp1.ma")
@@ -168,7 +171,7 @@ class ACQ4toNWB:
 
 
     def acq4tonwb(self, protocolname, outfilename: Union[Path, str, None] = None,
-            recordingmode:Literal["CC", "VC", "I=0"]="CC"):
+            recordingmode:Literal["IC", "CC", "VC", "I=0"]="CC"):
         print("datafile: ", protocolname, protocolname.is_dir())
         if outfilename is None:
             outfilename = self._get_short_name(protocolname)
@@ -183,19 +186,23 @@ class ACQ4toNWB:
         slice_index = self.AR.readDirIndex(currdir=protocolname.parent.parent)["."]
         cell_index = self.AR.readDirIndex(currdir=protocolname.parent)["."]
         proto_index = self.AR.readDirIndex(currdir=protocolname)["."]
+
+        recordingmode = proto_index['devices']['MultiClamp1']['mode']
+        assert(recordingmode in ["IC", "VC"])
         #
         # data in self.AR.data_array, self.AR.time_base, stimuli in self.AR.cmd_wave
         data_date = datetime.date.fromtimestamp(info["__timestamp__"])
-        try:
-            age = int(
-            info["age"]
-            .replace("p", "")
-            .replace("P", "")
-            .replace("~", "")
-            .replace("+", "")
-            )
-        except:
-            age = None
+        age = self.ISO8601_age(info["age"])
+        # try:
+        #     age = int(
+        #     info["age"]
+        #     .replace("p", "")
+        #     .replace("P", "")
+        #     .replace("~", "")
+        #     .replace("+", "")
+        #     )
+        # except:
+        #     age = None
         if "sex" not in info.keys() or info["sex"] == "":
             info["sex"] = "U"
         else:
@@ -206,7 +213,7 @@ class ACQ4toNWB:
             info["species"] = 'Mus musculus'
         if age is not None:
                 dob = datetime.datetime.combine(
-                data_date - datetime.timedelta(days=age), datetime.time()
+                data_date - datetime.timedelta(days=int(age[1:-2])), datetime.time(), tzlocal(),
             )
             # dobstr = dob.strftime("%d/%m/%Y%Z")
         else:
@@ -214,10 +221,11 @@ class ACQ4toNWB:
         if "mouse" in info["species"] or "Mouse" in info["species"]:
             info["species"] = 'Mus musculus'
         subject_id = info['animal identifier']
-        if subject_id is None or subject_id == "":
-            dset = Path(protocolname).parts
-            subject_id = str(Path(*dset[-6:-3]))
-
+        dset = Path(protocolname).parts
+        if subject_id.strip() in [None, '?', "", "NA"]:
+            print("rebuilt subjectid: ", str(Path(dset[-4])))
+            subject_id = str(Path(dset[-4]))
+        session_id = str(Path(*dset[-3:]))
         subject = NWB.file.Subject(
             age=self.ISO8601_age(info["age"]),
             description=info["strain"],
@@ -239,27 +247,27 @@ class ACQ4toNWB:
             info['notes'] = "  No Notes"
 
         self.NWBFile = NWB.NWBFile(
+            identifier=str(uuid.uuid4()), # random uuid for this dataset. 
             session_start_time=datetime.datetime.fromtimestamp(info['__timestamp__'], tz=tzlocal()),
-            session_id=f"{0:d}",
+            session_id=f"{session_id:s}",
             session_description=info['description'],
             keywords=["mouse", "intracellular recording", "channelrhodopsins", "pathway tracing",
                 "auditory cortex", "auditory thalamus", "medial geniculate", "inferior colliculus",
                 "brachium of the inferior colliculus", "cochlear nucleus", "dorsal cochlear nucleus",
                 "AAV", "synaptic potentials", "optogenetics"],
-            notes = f"Cell Type: {ctypes:s}\n  Full Protocol Path: {str(protocolname):s}\n" + info['notes'],
-            identifier=info['animal identifier'],
+            notes = f"Cell Type: {ctypes:s}\n" + info['notes'],
             protocol = str(protocolname.name),
             timestamps_reference_time=datetime.datetime.now(tzlocal()),
-            experimenter="Kasten, Michael R.",
+            experimenter=["Kasten, Michael R.", "Manis, Paul B."],
             lab="Manis Lab",
             institution="UNC Chapel Hill",
-            experiment_description="RF1NS128873",
+            experiment_description="1 R01 RF1NS128873",
             subject=subject,
         )
         device = NWB.device.Device("MC700B", "Current and Voltage clamp amplifier", "Axon Instruments (Molecular Devices)")
         self.NWBFile.add_device(device)
 
-        if recordingmode == "CC":
+        if recordingmode in ["IC", "CC"]:
             self.get_CC_data(protocolname=protocolname, info=info, device=device)
         elif recordingmode == "VC":
             self.get_VC_data(protocolname=protocolname, info=info, device=device)
@@ -278,6 +286,7 @@ class ACQ4toNWB:
             acq4_source_name:str="MultiClamp1.ma",
             electrode:int=1):
         
+
         self.AR.setDataName(acq4_source_name)
         print(f"\nLooking for a recordings from {acq4_source_name:s}")
         dataok = self.AR.getData(check=True)
@@ -339,6 +348,8 @@ class ACQ4toNWB:
             control_description = None,
             sweep_number = np.uint(1),
         )
+
+
         self.NWBFile.add_acquisition(istim)
         self.NWBFile.add_acquisition(vdata)
 
@@ -362,7 +373,7 @@ class ACQ4toNWB:
             ccseries_description = "Current Clamp with Laser scanning photostimulation"
         if ccseries_description is None:
             return None
-        for ampchannel in [1,2]:
+        for ampchannel in [1]:
             self.get_one_CC_recording(protocolname=protocolname,
                 ccseries=ccseries_description,
                 info=info, 
@@ -382,9 +393,7 @@ class ACQ4toNWB:
         s = []
         for d in self.AR.clampInfo['dirs']:
             datainfo = self.AR.getDataInfo(Path(d, self.AR.dataname))
-            # print('datainfo: ', datainfo, "\n")
-            # s.append(AR.getStim(Path(d, self.AR.dataname)))
-
+        
         elec = NWB.icephys.IntracellularElectrode(
             name=f"elec{electrode:d}",
             description="Sutter 1.5 mm patch as intracellular electrode",
@@ -394,7 +403,7 @@ class ACQ4toNWB:
         )
         self.NWBFile.add_icephys_electrode(elec)  # not well documented!
         
-        step_times = [np.int64(self.AR.tstart*self.AR.samp_rate), np.int64(self.AR.tend*self.AR.samp_rate)]
+        step_times = [np.uint64(self.AR.tstart*self.AR.samp_rate), np.uint64(self.AR.tend*self.AR.samp_rate)]
         vstim = NWB.icephys.VoltageClampStimulusSeries(
             name = f"Vcs{electrode:d}",
             stimulus_description = str(self.AR.protocol.name),
@@ -438,8 +447,44 @@ class ACQ4toNWB:
             sweep_number=np.uint(1),
             offset = datainfo[1]['ClampState']['holding']
         )
+
+
+        scinfo = self.AR.getScannerPositions(dataname="Laser-Blue-raw.ma")
+        lblue = self.AR.getLaserBlueCommand()
+        odate = None
+        if scinfo and lblue: # we have optical stimulation in the mix
+            sites = [self.AR.scannerinfo[spot]['pos'] for spot in self.AR.scannerinfo.keys()]
+            print('sites: ', sites)
+            odata = NWB.icephys.VoltageClampStimulusSeries(
+                name= f"Chr2 Stimulation {electrode:d}",
+                description="Optical stimulation control waveform for LED, laser or Pockels cell",
+                data = self.AR.LaserBlue_pCell.T,
+                rate = self.AR.LBR_sample_rate[0],
+                electrode = elec,
+                gain  = 1.0,
+                stimulus_description=str(protocolname.name),
+                conversion = 1.0,
+                control = [self.AR.scannerinfo[spot]['pos'] for spot in self.AR.scannerinfo.keys()],
+                control_description = "Scanner XY coordinates (in meters)",
+                comments=f"Spot size = {self.AR.spotsize:0.1f} meters",
+                unit='volts',
+
+            )
+            # print("scinfo: ", scinfo)
+            # print(self.AR.spotsize)
+            # print(self.AR.getBlueLaserTimes())
+
+            # # print(self.AR.scannerinfo)
+            # sc = {}
+            # for k in self.AR.scannerinfo.keys():
+            #     print(k)
+            #     sc[k] = {'rep': self.AR.scannerinfo[k]['rep'], 'pos': self.AR.scannerinfo[k]['pos']}
+            # print(sc)
+
         self.NWBFile.add_acquisition(vstim)
         self.NWBFile.add_acquisition(idata)
+        if odata is not None:
+            self.NWBFile.add_acquisition(odata)
     
     def get_VC_data(self, protocolname:Path, info:dict, device:NWB.device):
         """Check if a protocol is a one of our known
@@ -475,7 +520,7 @@ class ACQ4toNWB:
 def ConvertFile(filename:Union[str, Path], outputpath:str="test_data", device='MultiClamp1.ma', mode="CC"):
     A2N = ACQ4toNWB(outputpath)
     A2N.set_data_name(device)
-    NWBFile = A2N.acq4tonwb(f, recordingmode=mode)
+    NWBFile = A2N.acq4tonwb(filename, recordingmode=mode)
     print("Nwb file generated: ", NWBFile)
     results = list(inspect_all(path=NWBFile))
     if len(results) == 0:
@@ -484,9 +529,37 @@ def ConvertFile(filename:Union[str, Path], outputpath:str="test_data", device='M
         print("Error in conversion detected: ")
         print(results)
 
+def main():
+    import pandas as pd
+    HK_db = pd.read_pickle("/Users/pbmanis/Desktop/Python/HK_Collab/datasets/HK_fastcortex_DCN.pkl")
+    print(HK_db.cell_id)
+    def cvt(row):
+        path = row.data_directory
+        day = row.date
+        slice = row.slice_slice
+        cell = row.cell_cell
+        print("   ", row.cell_id)
+        for p in row.data_complete.split(','):
+            p = p.strip()
+            print (p)
+            continue
+            if p.startswith("CCIV") or p.startswith("Map") or p.startswith("Vc_LED") or p.startswith("Ic_LED"):
+                file = Path(path, day, slice, cell, p)
+                print("file: ", file)
+                ConvertFile(filename = file)
+    
+    HK_db = HK_db.apply(cvt, axis=1)
+    # )for i in HK_db.index():
+
+
+
 if __name__ == "__main__":
-#    f = Path('/Volumes/Pegasus/ManisLab_Data3/Kasten_Michael/NF107Ai32_Het/2017.05.01_000/slice_000/cell_000/CCIV_short_000')
-    # f = Path('/Volumes/Pegasus_002/ManisLab_Data3/Kasten_Michael/HK_collab_ICinj/Thalamocortical/2022.10.10_000/slice_001/cell_000/CCIV_long_000')
-    # f = Path('/Volumes/Pegasus_002/ManisLab_Data3/Kasten_Michael/2017.02.23_000/slice_000/cell_000/Map_NewBlueLaser_VC_single_MAX_005')
-    f = Path('/Volumes/Pegasus_002/ManisLab_Data3/Kasten_Michael/NF107Ai32_Het/2019.04.16_000/slice_002/cell_000/VCIV_simple_001')
-    ConvertFile(filename=f, mode="VC")
+    # main()
+    f1 = Path('/Volumes/Pegasus_002/ManisLab_Data3/Kasten_Michael/HK_Collab/Thalamocortical/Rig4/2022.11.29_000/slice_001/cell_002/Vc_LED_stim_onebig_000')
+    # # f2 = Path('/Volumes/Pegasus_002/ManisLab_Data3/Kasten_Michael/HK_Collab/Thalamocortical/Rig4/2022.10.10_000/slice_001/cell_000/Vc_LED_stim_wut_000')
+    # f2 = Path('/Volumes/Pegasus_002/ManisLab_Data3/Kasten_Michael/HK_Collab/Thalamocortical/Rig4/2022.10.10_000/slice_001/cell_000/Ic_LED_stim_000')
+    # # f4 = Path('/Volumes/Pegasus_002/ManisLab_Data3/Kasten_Michael/HK_Collab/Thalamocortical/Rig4/2022.10.10_000/slice_001/cell_000/CCIV_1nA_max_1s_pulse_posonly_000')
+    # f3 = Path('/Volumes/Pegasus/ManisLab_Data3/Kasten_Michael/2017.02.23_000/slice_000/cell_000/Map_NewBlueLaser_VC_single_MAX_005')
+    # f4 = Path('/Volumes/Pegasus_002/ManisLab_Data3/Kasten_Michael/NF107Ai32_Het/2019.04.16_000/slice_002/cell_000/VCIV_simple_001')
+    for f in [f1]:
+         ConvertFile(filename=f, mode="VC")
