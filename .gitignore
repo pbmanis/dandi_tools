@@ -1,12 +1,13 @@
 # special directories that we don't want to track
-ForGeorge/ # files that are for George Spirou
-MorphologyData/  # misc morphology data not necessarily related to the project
-dandi_venv/ # virtual environment
-toml/archived
-scripts/Archived
-nb/*.html
-nb/*.nwb
-nb/*.jl
+# virtual environment
+
+dandi_venv/
+test_data/
+206452/
+000407/
+
+# jupyter lab files
+jupyter-nwb/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -160,6 +161,8 @@ venv.bak/
 
 # mypy
 .mypy_cache/
-vcnmodel/analyzers/sac_cython.c
-vcnmodel/analyzers/sttc_cython.c
-docs/vcnmodel.rstx
+
+dandi_tools.egg-info
+dandi_venv/bin
+dandi_venv/share
+dandi_venv/pyvenv.cfg

@@ -1,4 +1,3 @@
-from pickle import NEWOBJ
-
-
+# this toml file lists available input file locations
+# mainly for testing
 test_file: "../test_data/example_file_path_42.nwb"
