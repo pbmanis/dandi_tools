@@ -17,6 +17,9 @@ __pycache__/
 # temporary ipy/jupyter notebooks
 Untitled*.ipynb
 
+# vscode
+.vscode/
+
 # different temporary visualization files
 *.obj
 *.mtl
