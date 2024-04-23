@@ -30,7 +30,7 @@ setup(name='dandi_tools',
       entry_points={
           'console_scripts': [
                'dispnwb=src.display_nwb:main',
-               'acq4tonwb=src.acq4tonwb:main'k
+               'acq4tonwb=src.acq4tonwb:main',
                ],
       },
       classifiers = [
