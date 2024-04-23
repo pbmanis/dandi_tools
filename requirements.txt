@@ -1,8 +1,8 @@
-# cnmodel for Python 3.7+ with basic working environment
-# Used by make_local_env.sh
+# Python 3.9+ with basic working environment
+# Used by make_env.sh
 
 # development utilities
-black==19.10b0
+black>=24.3.0
 flake8
 vulture
 Pint==0.14
