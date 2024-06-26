@@ -21,7 +21,6 @@ class ReadAcq4:
         else:
             self.readfile(f=filename)
 
-
     def readfile(self, f: Union[Path, str, None] = None):
         """_summary_
 
@@ -53,22 +52,32 @@ class ReadAcq4:
     def onpick(self, event):
 
         self.trace_counter += 1
-        zero_position = 100e-12*(self.trace_counter-1)
-        lp = self.axs["E"].plot(self.timebase[:self.maxindex],
-            self.idata[:self.maxindex, event.ind]+zero_position, linewidth=0.5)
+        zero_position = 100e-12 * (self.trace_counter - 1)
+        lp = self.axs["E"].plot(
+            self.timebase[: self.maxindex],
+            self.idata[: self.maxindex, event.ind] + zero_position,
+            linewidth=0.5,
+        )
         color = lp[0].get_color()  # get color of last trace
-        self.axs["E"].text(x=0., y=zero_position,
-            s=f"Spot {event.ind[0]:d}", color=color,
-            fontdict = {"fontsize": 8, "fontweight": "normal",
-            "va": "bottom", "ha": "left"})
+        self.axs["E"].text(
+            x=0.0,
+            y=zero_position,
+            s=f"Spot {event.ind[0]:d}",
+            color=color,
+            fontdict={"fontsize": 8, "fontweight": "normal", "va": "bottom", "ha": "left"},
+        )
         self.ELabel.set_text(f"Trace {event.ind[0]:d}")
-        lpos = [self.AR.scanner_positions[event.ind, 0] / 1e3,
-                self.AR.scanner_positions[event.ind, 1] / 1e3,]
+        lpos = [
+            self.AR.scanner_positions[event.ind, 0] / 1e3,
+            self.AR.scanner_positions[event.ind, 1] / 1e3,
+        ]
 
-        self.axs["D"].text(x=lpos[0], y = lpos[1], 
-            s=f"{self.trace_counter:d}", 
-            fontdict = {"fontsize": 8, "fontweight": "bold",
-                "va": "center", "ha": "center"})
+        self.axs["D"].text(
+            x=lpos[0],
+            y=lpos[1],
+            s=f"{self.trace_counter:d}",
+            fontdict={"fontsize": 8, "fontweight": "bold", "va": "center", "ha": "center"},
+        )
         self.fig.canvas.draw()
         self.fig.canvas.flush_events()
 
@@ -100,28 +109,29 @@ class ReadAcq4:
 
         for i in range(self.AR.traces.shape[0]):
             axs["A"].plot(
-                self.timebase[:self.maxindex],
-                self.idata[:self.maxindex,i] + i * delta_I,
+                self.timebase[: self.maxindex],
+                self.idata[: self.maxindex, i] + i * delta_I,
                 linewidth=0.33,
             )
             axs["B"].plot(
-                self.timebase[:self.maxindex],
-                self.command[:self.maxindex, i],
+                self.timebase[: self.maxindex],
+                self.command[: self.maxindex, i],
                 linewidth=0.33,
             )
 
             if self.opto:
                 axs["C"].plot(
-                    self.AR.LaserBlue_time_base[:self.maxindex,i], self.AR.LaserBlue_pCell[:self.maxindex,i]
+                    self.AR.LaserBlue_time_base[: self.maxindex, i],
+                    self.AR.LaserBlue_pCell[: self.maxindex, i],
                 )
         axs["F"].plot(
-            self.timebase[:self.maxindex],
-            np.mean(self.idata[:self.maxindex], axis=1),
+            self.timebase[: self.maxindex],
+            np.mean(self.idata[: self.maxindex], axis=1),
             linewidth=0.5,
         )
         self.trace_plot = axs["E"].plot(
-            self.timebase[:self.maxindex],
-            self.idata[:self.maxindex, 0],
+            self.timebase[: self.maxindex],
+            self.idata[: self.maxindex, 0],
             "g-",
             linewidth=0.5,
         )
@@ -149,7 +159,7 @@ class ReadAcq4:
 
         # draw a map of the points by current
         if self.opto is not None:
-            osize = float(self.AR.scanner_spotsize)/1e3 # match units with positions
+            osize = float(self.AR.scanner_spotsize) / 1e3  # match units with positions
             patches = []
             # create a circle to show the position of each stimulus
             for isp in range(self.AR.scanner_positions.shape[0]):
@@ -167,11 +177,17 @@ class ReadAcq4:
             istim = int(0.5 * self.AR.sample_rate[0])
             onems = int(0.001 * self.AR.sample_rate[0])
             twentyms = 20 * onems
-            grandmean, grandstd = compute_scores.grand_mean_std(self.AR.time_base, 
-                self.AR.traces, window=[0.480, 0.5])
-            zscores = compute_scores.ZScore2D(self.AR.time_base,
-                self.AR.traces, pre_std=grandstd, pre_mean=grandmean,
-                twin_base = [0.480, 0.5], twin_resp = [0.501, 0.531])
+            grandmean, grandstd = compute_scores.grand_mean_std(
+                self.AR.time_base, self.AR.traces, window=[0.480, 0.5]
+            )
+            zscores = compute_scores.ZScore2D(
+                self.AR.time_base,
+                self.AR.traces,
+                pre_std=grandstd,
+                pre_mean=grandmean,
+                twin_base=[0.480, 0.5],
+                twin_resp=[0.501, 0.531],
+            )
             # zscore = np.sum(
             #     self.AR.traces[:, istim : istim + twentyms], axis=0
             # ) - np.mean(

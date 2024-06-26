@@ -8,10 +8,10 @@ Support::
 
     NIH grants: 1R01NS128873-01  Kato and Manis
     
-Paul B. Manis, 2022
+Paul B. Manis, 2022-2024
 """
 
-version = '0.1.1'
+version = '0.2.0'
 
 setup(name='dandi_tools',
       version=version,
@@ -25,7 +25,7 @@ setup(name='dandi_tools',
       #     Extension(
       #               include_dirs=[numpy.get_include()]),
       #     ],
-      python_requires='>=3.9',
+      python_requires='>=3.11',
       zip_safe=False,
       entry_points={
           'console_scripts': [
