@@ -5,7 +5,10 @@ dandi_venv/
 test_data/
 206452/
 000407/
-
+*.log
+*.nwb
+src/tutorial_test.py
+test_data_dcn/
 # jupyter lab files
 jupyter-nwb/
 
