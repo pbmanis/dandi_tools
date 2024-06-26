@@ -7,9 +7,8 @@ flake8
 vulture
 Pint==0.14
 isort==5.0.2
-mypy==0.961
+mypy>1.0
 jupyterlab>=3.2.0
-nb_black
 pandoc
 nbconvert
 pytest==4.5.0
@@ -17,11 +16,14 @@ docutils<0.18
 sphinx>=4.0
 pyabf
 PyPDF2
+Cython>=3.0
 
-dandi
-nwbinspector
+dandi==0.62.1
+# nwbinspector==0.4.37
+sympy
 
-Cython==0.29.17
+
+Cython>=3.0
 dill==0.3.4
 elephant==0.10.0
 lmfit==1.0.3
@@ -36,12 +38,12 @@ pandas>=1.5.0
 quantities>=0.12.1
 scipy>=1.12.0
 shapely  # required by ephys/montager
-pynwb>=2.1.0
+pynwb>=2.8.0
 pyqt6>=6.4.0
 pyqt6-sip>=13.4.0 # 4.19.19
 # PyOpenGL==3.1.6
 # PyOpenGL-accelerate==3.1.6
-pyqtgraph==0.12.4
+pyqtgraph==0.13.4
 scikit_learn==1.0.2
 seaborn>=0.11.0
 six==1.12.0
@@ -53,6 +55,6 @@ xlrd>=1.0.0
 -e /Users/pbmanis/Desktop/Python/pylibrary
 -e /Users/pbmanis/Desktop/Python/metaarray
 -e /Users/pbmanis/Desktop/Python/ephys
-# -e /Users/pbmanis/Desktop/Python/nwbinspector
+-e /Users/pbmanis/Desktop/Python/nwbinspector
 
 
