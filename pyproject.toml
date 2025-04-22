@@ -1,0 +1,35 @@
+
+[build-system]
+build-backend = "setuptools.build_meta"
+requires = ["setuptools"]
+
+[project]
+name = "dandi"
+version = "0.2.0"
+description = "Process datasets for DANDI"
+readme = "README.md"
+authors = [
+    {name = "Paul Manis", email = "pmanis@med.unc.edu"},
+    {name = "Paul B. Manis", email = "pmanis@med.unc.edu"},
+]
+requires-python = "==3.13.3"
+dependencies = []
+
+license = "MIT"
+classifiers = [
+    "Development Status ::  Beta",
+    "Environment :: Console",
+    "Intended Audience :: Neuroscientists",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.13+",
+    "Topic :: Data Processing :: Neuroscience",
+    "Topic :: Scientific Software :: Tools :: Python Modules",
+]
+[project.urls]
+Homepage = "http://github.com/pbmanis/dandi"
+
+[tool.pdm]
+distribution = false
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"]}

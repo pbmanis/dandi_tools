@@ -11,36 +11,37 @@ Support::
 Paul B. Manis, 2022-2024
 """
 
-version = '0.2.0'
+version = "0.2.0"
 
-setup(name='dandi_tools',
-      version=version,
-      description='Dandi/NWB tools ',
-      url='http://github.com/pbmanis/dandi_tools',
-      author='Paul B. Manis',
-      author_email='pmanis@med.unc.edu',
-      license='MIT',
-      packages=find_packages(include=['dandi*']),
-      # ext_modules=[
-      #     Extension(
-      #               include_dirs=[numpy.get_include()]),
-      #     ],
-      python_requires='>=3.11',
-      zip_safe=False,
-      entry_points={
-          'console_scripts': [
-               'dispnwb=src.display_nwb:main',
-               'acq4tonwb=src.acq4tonwb:main',
-               ],
-      },
-      classifiers = [
-             "Programming Language :: Python :: 3.9+",
-             "Development Status ::  Beta",
-             "Environment :: Console",
-             "Intended Audience :: Manis/Kato Labs",
-             "License :: MIT",
-             "Operating System :: OS Independent",
-             "Topic :: Software Development :: Tools :: Python Modules",
-             "Topic :: Brain Initiative :: Neuroscience",
-             ],
-    )
+setup(
+    name="dandi_tools",
+    version=version,
+    description="Dandi/NWB tools ",
+    url="http://github.com/pbmanis/dandi_tools",
+    author="Paul B. Manis",
+    author_email="pmanis@med.unc.edu",
+    license="MIT",
+    packages=find_packages(include=["dandi*"]),
+    # ext_modules=[
+    #     Extension(
+    #               include_dirs=[numpy.get_include()]),
+    #     ],
+    python_requires=">=3.11",
+    zip_safe=False,
+    entry_points={
+        "console_scripts": [
+            "dispnwb=src.display_nwb:main",
+            "acq4tonwb=src.acq4_to_nwb:main",
+        ],
+    },
+    classifiers=[
+        "Programming Language :: Python :: 3.9+",
+        "Development Status ::  Beta",
+        "Environment :: Console",
+        "Intended Audience :: Manis/Kato Labs",
+        "License :: MIT",
+        "Operating System :: OS Independent",
+        "Topic :: Software Development :: Tools :: Python Modules",
+        "Topic :: Brain Initiative :: Neuroscience",
+    ],
+)
