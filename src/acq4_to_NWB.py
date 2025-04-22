@@ -1091,9 +1091,10 @@ def main():
     HK_db = pd.read_pickle(
         # "/Users/pbmanis/Desktop/Python/HK_Collab/datasets/HK_fastcortex_cortex.pkl"
         # "/Users/pbmanis/Desktop/Python/HK_Collab/datasets/HK_fastcortex_DCN.pkl"
-        "/Users/pbmanis/Desktop/Python/HK_Collab/datasets/Thalamocortical/HK_TC_datasummary-2024.02.10.pkl"
+        # "/Users/pbmanis/Desktop/Python/HK_Collab/datasets/Thalamocortical/HK_TC_datasummary-2024.02.10.pkl"
+        "/Users/pbmanis/Desktop/Python/HK_Collab/datasets/HK_CRH-Cre/HK_TC_datasummary-2025.04.21.pkl"
     )
-    experiment_name = "Thalamocortical"
+    experiment_name = "HK_CRH-Cre"
     print("Converting acq4 to NWB from database: ", HK_db.cell_id)
 
     def select(protocols: list):
@@ -1182,5 +1183,5 @@ def check_conversions():
 
 if __name__ == "__main__":
     main()  # convert a bunch of files
-    check_conversions()
+    # check_conversions()
     # check_conversion("/Users/pbmanis/Desktop/Python/Dandi/test_data/Thalamocortical~Rig2~2023.03.31~S01C00.nwb")  # check the conversion
