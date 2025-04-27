@@ -400,7 +400,7 @@ class ReadNWB:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Display an NWB file")
-    parser.add_argument(dest="inputfile", type=str, help="input filenbame")
+    parser.add_argument(dest="inputfile", type=str, help="input filename")
     args = parser.parse_args()
     if not Path(args.inputfile).is_file():
         print(f"File {args.inputfile} not found.")
