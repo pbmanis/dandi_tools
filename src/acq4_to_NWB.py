@@ -1,140 +1,215 @@
 """
-This program provides functions to tead and convert acq4 data to NWB format
-that is acceptable for the Dandi repository.
-It was specifically designed for the auditory cortex experiments with Kato lab,
-but should be generally useful for converting other kinds of acq4 experiments.
-A single file can be converted by calling ConvertFile(filename)
-The conversion is checked after generating the outputfile with nwbinspector.
+This program provides functions to tead and convert acq4 data to NWB format that
+is acceptable for the Dandi repository. It was specifically designed for the
+auditory cortex experiments with Kato lab, but should be generally useful for
+converting other kinds of acq4 experiments. A single file can be converted by
+calling ConvertFile(filename) The conversion is checked after generating the
+outputfile with nwbinspector.
 
 V0.2.0, 24 June 2024
 
-NWBFile expects:
-class pynwb.file.NWBFile(
+NWBFile expects: class pynwb.file.NWBFile(
     Required:
-        session_description (str) :: a description of the session where this data was generated
-        identifier (str) :: a unique text identifier for the file
-        session_start_time (datetime) :: the start date and time of the recording session
-        
+        session_description (str) :: a description of the session where this
+        data was generated identifier (str) :: a unique text identifier for the
+        file session_start_time (datetime) :: the start date and time of the
+        recording session
+
     Optional (we try to include these):
-        experimenter (tuple or list or str) :: name of person who performed experiment
-        experiment_description (str) :: general description of the experiment
-        institution (str) :: institution(s) where experiment is performed
-        lab (str) :: lab where experiment was performed
-        source_script (str) :: Script file used to create this NWB file.
+        experimenter (tuple or list or str) :: name of person who performed
+        experiment experiment_description (str) :: general description of the
+        experiment institution (str) :: institution(s) where experiment is
+        performed lab (str) :: lab where experiment was performed source_script
+        (str) :: Script file used to create this NWB file.
         source_script_file_name (str) :: Name of the source_script file
 
         devices (list or tuple) :: Device objects belonging to this NWBFile
-        subject (Subject) :: subject metadata
-        protocol (str) :: Experimental protocol, if applicable. E.g., include IACUC protocol
-        acquisition (list or tuple) :: Raw TimeSeries objects belonging to this NWBFile
-        stimulus (list or tuple) :: Stimulus TimeSeries objects belonging to this NWBFile : Electrical
-        opto: OptogeneticStimulusSites and waveforms that belong to this NWBFile.
-        lab_meta_data (list or tuple) :: an extension that contains lab-specific meta-data
-        intracellular_recordings (IntracellularRecordingsTable) :: the IntracellularRecordingsTable table that belongs to this NWBFile
-        icephys_simultaneous_recordings (SimultaneousRecordingsTable) :: the SimultaneousRecordingsTable table that belongs to this NWBFile
-        icephys_sequential_recordings (SequentialRecordingsTable) :: the SequentialRecordingsTable table that belongs to this NWBFile
-        icephys_repetitions (RepetitionsTable) :: the RepetitionsTable table that belongs to this NWBFile
-        icephys_experimental_conditions (ExperimentalConditionsTable) :: the ExperimentalConditionsTable table that belongs to this NWBFile
+        subject (Subject) :: subject metadata protocol (str) :: Experimental
+        protocol, if applicable. E.g., include IACUC protocol acquisition (list
+        or tuple) :: Raw TimeSeries objects belonging to this NWBFile stimulus
+        (list or tuple) :: Stimulus TimeSeries objects belonging to this NWBFile
+        : Electrical opto: OptogeneticStimulusSites and waveforms that belong to
+        this NWBFile. lab_meta_data (list or tuple) :: an extension that
+        contains lab-specific meta-data intracellular_recordings
+        (IntracellularRecordingsTable) ::
+            the IntracellularRecordingsTable table that belongs to this NWBFile
+        icephys_simultaneous_recordings (SimultaneousRecordingsTable) ::
+            the SimultaneousRecordingsTable table that belongs to this NWBFile
+        icephys_sequential_recordings (SequentialRecordingsTable) ::
+            the SequentialRecordingsTable table that belongs to this NWBFile
+        icephys_repetitions (RepetitionsTable) ::
+            the RepetitionsTable table that belongs to this NWBFile
+        icephys_experimental_conditions (ExperimentalConditionsTable) ::
+            the ExperimentalConditionsTable table that belongs to this NWBFile
 
-         units (Units) :: A table containing unit metadata
+        units (Units) :: A table containing unit metadata
 
-        pharmacology (str) :: Description of drugs used, including how and when they were administered. Anesthesia(s), painkiller(s), etc., plus dosage, concentration, etc.
-        virus (str) :: Information about virus(es) used in experiments, including virus ID, source, date made, injection location, volume, etc.
+        pharmacology (str) :: Description of drugs used, including how and when
+             they were administered. Anesthesia(s), painkiller(s), etc., plus
+             dosage, concentration, etc.
+        virus (str) :: Information about virus(es) used in experiments,
+            including virus ID, source, date made, injection location, volume,
+            etc.
 
     Optional and not included:
-        file_create_date (ndarray or list or tuple or Dataset or StrDataset or HDMFDataset or AbstractDataChunkIterator or datetime) :: the date and time the file was created and subsequent modifications made
-        timestamps_reference_time (datetime) ::  date and time corresponding to time zero of all timestamps; defaults to value of session_start_time
-        session_id (str) :: lab-specific ID for the session
-        keywords (ndarray or list or tuple or Dataset or StrDataset or HDMFDataset or AbstractDataChunkIterator) :: Terms to search over
-        related_publications (tuple or list or str) :: Publication information.PMID, DOI, URL, etc. If multiple, concatenate together and describe which is which. such as PMID, DOI, URL, etc
-        slices (str) :: Description of slices, including information about preparation thickness, orientation, temperature and bath solution
-        data_collection (str) :: Notes about data collection and analysis.
-        surgery (str) :: Narrative description about surgery/surgeries, including date(s) and who performed surgery.
-        stimulus_notes (str) :: Notes about stimuli, such as how and where presented.
-        analysis (list or tuple) :: result of analysis
-        stimulus (list or tuple) :: Stimulus TimeSeries objects belonging to this NWBFile
-        stimulus_template (list or tuple) :: Stimulus template TimeSeries objects belonging to this NWBFile
-        epochs (TimeIntervals) :: Epoch objects belonging to this NWBFile
-        epoch_tags (tuple or list or set) :: A sorted list of tags used across all epochs
-        trials (TimeIntervals) :: A table containing trial data
-        invalid_times (TimeIntervals) :: A table containing times to be omitted from analysis
-        intervals (list or tuple) :: any TimeIntervals tables storing time intervals
-        processing (list or tuple) :: ProcessingModule objects belonging to this NWBFile
-        electrodes (DynamicTable) :: the ElectrodeTable that belongs to this NWBFile
-        electrode_groups (Iterable) :: the ElectrodeGroups that belong to this NWBFile
-        sweep_table (SweepTable) :: the SweepTable that belong to this NWBFile
-        imaging_planes (list or tuple) :: ImagingPlanes that belong to this NWBFile
-        ogen_sites (list or tuple) :: OptogeneticStimulusSites that belong to this NWBFile
+        file_create_date (ndarray or list or tuple or Dataset or StrDataset
+             or HDMFDataset or AbstractDataChunkIterator or datetime) :: the
+             date and time the file was created and subsequent modifications
+             made
+        timestamps_reference_time (datetime) ::
+            date and time corresponding to time zero of all timestamps; defaults
+            to value of session_start_time
+        session_id (str) :: lab-specific ID for the session keywords (ndarray or
+        list or tuple or Dataset or StrDataset or HDMFDataset
+            or AbstractDataChunkIterator) :: Terms to search over
+        related_publications (tuple or list or str) :: Publication
+        information.PMID, DOI, URL, etc. If multiple, concatenate together and
+        describe which is which. such as PMID, DOI, URL, etc slices (str) ::
+        Description of slices, including information about preparation
+        thickness, orientation, temperature and bath solution data_collection
+        (str) :: Notes about data collection and analysis. surgery (str) ::
+        Narrative description about surgery/surgeries, including date(s) and who
+        performed surgery. stimulus_notes (str) :: Notes about stimuli, such as
+        how and where presented. analysis (list or tuple) :: result of analysis
+        stimulus (list or tuple) :: Stimulus TimeSeries objects belonging to
+        this NWBFile stimulus_template (list or tuple) :: Stimulus template
+        TimeSeries objects belonging to this NWBFile epochs (TimeIntervals) ::
+        Epoch objects belonging to this NWBFile epoch_tags (tuple or list or
+        set) :: A sorted list of tags used across all epochs trials
+        (TimeIntervals) :: A table containing trial data invalid_times
+        (TimeIntervals) :: A table containing times to be omitted from analysis
+        intervals (list or tuple) :: any TimeIntervals tables storing time
+        intervals processing (list or tuple) :: ProcessingModule objects
+        belonging to this NWBFile electrodes (DynamicTable) :: the
+        ElectrodeTable that belongs to this NWBFile electrode_groups (Iterable)
+        :: the ElectrodeGroups that belong to this NWBFile sweep_table
+        (SweepTable) :: the SweepTable that belong to this NWBFile
+        imaging_planes (list or tuple) :: ImagingPlanes that belong to this
+        NWBFile ogen_sites (list or tuple) :: OptogeneticStimulusSites that
+        belong to this NWBFile
 
         scratch (list or tuple) :: scratch data
-       icephys_filtering (str) :: [DEPRECATED] Use IntracellularElectrode.filtering instead. Description of filtering used.
-        ic_electrodes (list or tuple) :: DEPRECATED use icephys_electrodes parameter instead. IntracellularElectrodes that belong to this NWBFile
+       icephys_filtering (str) :: [DEPRECATED] Use
+       IntracellularElectrode.filtering instead. Description of filtering used.
+        ic_electrodes (list or tuple) :: DEPRECATED use icephys_electrodes
+        parameter instead. IntracellularElectrodes that belong to this NWBFile
 
-        
+
     Mapping ACQ4 to NWB:
     ====================
     Acq4 stores data in a hierarchical directory structure.
-        The top level is the DAY of the experiment.
-        The second level is the SLICE number.
-        The third level is the CELL number.
-        The fourth level is the PROTOCOL name, with an appended number in the format "_000".
-            Repeats of a protocol will increment this number, although if a protocol is ended
-            early, the sequence may not have fixed steps.
+        The top level is the DAY of the experiment. The second level is the
+        SLICE number. The third level is the CELL number. The fourth level is
+        the PROTOCOL name, with an appended number in the format "_000".
+            Repeats of a protocol will increment this number, although if a
+            protocol is ended early, the sequence may not have fixed steps.
         Within a protocol, there is a series of subdirectories, each containing
             the data for a single sweep.
-        The protocol "sweep" subdirectories are numbered according to the nesting of repititions. If there is only 
-        one repitition, the subdirectory is named "000". If there are multiple repitions, the
-        Subdirectories are named "000_000", "001_000", (for example showing two reps of the same stimulus).
-            etc. If there is another parameter that is varied, it is added to the name, e.g. "000_000_000" (this
-            is rarely if ever done).
-    
+        The protocol "sweep" subdirectories are numbered according to the
+        nesting of repititions. If there is only one repitition, the
+        subdirectory is named "000". If there are multiple repitions, the
+        Subdirectories are named "000_000", "001_000", (for example showing two
+        reps of the same stimulus).
+            etc. If there is another parameter that is varied, it is added to
+            the name, e.g. "000_000_000" (this is rarely if ever done).
+
     Mapping this to the NWB structure:
         1. Experimental conditions table - not used here.
         2. Repetitions Table: Should represent the repetitions of a protocol.
-        3. Sequential Recordings Table: Should represent the sweeps within a repetition (usually parametric
-        variation of current, laser spot position, or other stimulus parameter). This corresponds to a "protocol"
-        in the acq4 structure.
-        4. Simultaneous Recordings Table: Should represent the simultaneous recordings from multiple electrodes. We
-        are not doing this, and it can be skipped according to the pynwb documentation.
-        5. Intracellular Recordings Table: mapping recordings from multiple electrodes to the individual intracellular
-        recordings. This is not used here (we are not recording from multiple electrodes).
-        6. PatchClampSeries: This is the lowest level, that corresponds to a single trial or sweep in acq4 - typically
-        the current or voltage trace, and the stimulus command. This is the level at which we will store the traces.
+        3. Sequential Recordings Table: Should represent the sweeps within a
+           repetition (usually parametric
+        variation of current, laser spot position, or other stimulus parameter).
+        This corresponds to a "protocol" in the acq4 structure. 4. Simultaneous
+        Recordings Table: Should represent the simultaneous recordings from
+        multiple electrodes. We are not doing this, and it can be skipped
+        according to the pynwb documentation. 5. Intracellular Recordings Table:
+        mapping recordings from multiple electrodes to the individual
+        intracellular recordings. This is not used here (we are not recording
+        from multiple electrodes). 6. PatchClampSeries: This is the lowest
+        level, that corresponds to a single trial or sweep in acq4 - typically
+        the current or voltage trace, and the stimulus command. This is the
+        level at which we will store the traces.
 
-        Also included are optical stimluation data, stored in ogen structures (data and series). 
+        Also included are optical stimluation data, stored in ogen structures
+        (data and series).
 
-We use the NAME of each entry to parse and reassemble the data for display. See display_nwb.py 
-for an example of how we use this. The name is formatted as a string that can be parsed (in regex) to extract the
-protocol, data type, and sweep number. The protocol and sweep numbers are used to bind the stimulus
-(optical, electrical) and recordings (electrical) together. The optogenetic data in the ogen structures similarly
-has names that match and hold other parameters such as the spot location (if using the laser with a scanning
-mirror), power, etc. )
+We use the NAME of each entry to parse and reassemble the data for display. See
+display_nwb.py for an example of how we use this. The name is formatted as a
+string that can be parsed (in regex) to extract the protocol, data type, and
+sweep number. The protocol and sweep numbers are used to bind the stimulus
+(optical, electrical) and recordings (electrical) together. The optogenetic data
+in the ogen structures similarly has names that match and hold other parameters
+such as the spot location (if using the laser with a scanning mirror), power,
+etc. )
 
-        
-Support::
+
+UPLOAD TO DANDI
+----------------
+1. make sure you have the latest DANDI (pip install dandi==0.67.3 or whatever is
+   latest)
+2. maker sure you have the latest dandischema (pip install dandischema==0.11.0
+   or whatever is latest)
+ Then at the terminal:
+```
+1. dandi download https://dandiarchive.org/dandiset/<dataset_id>/draft
+2. cd <dataset_id> dandi organize <source_folder> -f dry   # dry run to see if it works
+3. dandi organize <source_folder> 
+4. dandi validate dandi upload
+``` Support::
+    (this is also information that needs to be manually filled out at DANDI)
 
     NIH grants:
     DC RF1 NS128873 (Kato, Manis, MPI, 2022-) Cortical circuits for the integration of parallel short-latency auditory pathways.
-    DC R01 DC019053 (Manis, 2020-2025) Cellular mechanisms of auditory information processing. 
+    DC R01 DC019053 (Manis, 2020-2025) Cellular mechanisms of auditory information processing.
 
-Copyright 2022-2024 Paul B. Manis
-Distributed under MIT/X11 license. See license.txt for more infomation. 
+    Ethics:
+    iacuc@med.unc.edu
+    IACUC protocol 24.083 (Manis)
+    https://research.unc.edu/iacuc/
+
+Copyright 2022-2025 Paul B. Manis Distributed under MIT/X11 license. See
+license.txt for more information.
+ORCID:0000-0003-0131-8961
+ROR.org id: https://ror.org/0130frc33
 
 """
 
+import argparse
+import concurrent.futures
 import datetime
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
+import re
 from typing import List, Literal, Tuple, Union
 
 import numpy as np
 import pynwb as NWB
-from pynwb.core import DynamicTable, VectorData
 from dateutil.tz import tzlocal
 from ephys import datareaders as DR
 from nwbinspector import inspect_all, inspect_nwbfile
 from pynwb import NWBHDF5IO
+from pynwb.core import DynamicTable, VectorData
+
+# re_datasets = re.compile(r"^([a-z_]){1,3}", re.IGNORECASE) # (?P<id>)[0-9]{6}$", re.IGNORECASE)  # match the acq4 data files
+
+# m = re_datasets.match("HK_Cre_ugh_001422")  # should be True
+# print(m)
+# print(m.group(2))
+# print(m.groups())
+# print(m.group("id"))  # should be 001422
+
+re_pnd = re.compile(r"^[P]{0,1}([0-9]{1,9})[D]{0,1}$", re.IGNORECASE)  # match the acq4 data files
+# tests:
+# d = re_pnd.match("P30D")
+# print("P30D:" , d)
+# d = re_pnd.match("")
+# print("no entry: ", d)
+# d = re_pnd.match("P30")
+# print("P30: ", d)
+# d = re_pnd.match("30")
+# print("30: ", d)
+# exit()
 
 
 def def_lister():
@@ -161,7 +236,7 @@ print("acq4tonwb")
 
 
 class ACQ4toNWB:
-    def __init__(self, out_file_path: Union[str, Path, None] = None):
+    def __init__(self, output_path: Union[str, Path, None] = None):
         """Convert a file from ACQ4 (www.acq4.org) format to NWB format (www.nwb.org)
         See the documentation above for the mapping between these formats.
 
@@ -170,7 +245,7 @@ class ACQ4toNWB:
         """
         self.AR = DR.acq4_reader.acq4_reader()  # get acq4 reader from the ephys package.
 
-        self.out_file_path = out_file_path
+        self.out_file_path = output_path
         # All of the data here is single electrode, and "MultiClamp1.ma" is the
         # name of the data file holding the ephys data. The ".ma" acq4 files are held in "metaarray" format, but
         # these are basically hdf5 files. They are accompanied by .index files with additional metadata.
@@ -323,6 +398,7 @@ class ACQ4toNWB:
         experiment_name: str,
         path_to_cell: Union[str, Path],
         protocols: list,
+        output_path: Union[Path, str] = None,
         outfilename: Union[Path, str, None] = None,
         appendmode: bool = False,
         recordingmode: Literal["IC", "CC", "VC", "I=0"] = "CC",
@@ -341,12 +417,14 @@ class ACQ4toNWB:
                 None indicates failure to read the data.
                 an outputfile indicates conversion success.
         """
-
+        assert output_path is not None, "Output path must be specified"
         rig_id = self.find_name_in_path(path_to_cell, "Rig")
         expt_id = self.find_name_in_path(path_to_cell, experiment_name)
         if outfilename is None:
+            Path(output_path).mkdir(parents=True, exist_ok=True)
+            print(f"Output path {output_path} is not an existing directory, creating it.")
             outfilename = Path(
-                "test_data",
+                output_path,
                 self._get_short_name(path_to_cell, expt_id, rig_id) + ".nwb",
             )
 
@@ -372,7 +450,7 @@ class ACQ4toNWB:
         data_date = datetime.date.fromtimestamp(info["__timestamp__"])
 
         # get the cell file metadata and clean up the representation.
-        age = self.ISO8601_age(info["age"])
+        age = self.ISO8601_age(info.get("age", None))
         if "sex" not in info.keys() or info["sex"] == "":
             info["sex"] = "U"
         else:
@@ -381,18 +459,24 @@ class ACQ4toNWB:
             info["weight"] = None
         if "species" not in info.keys() or info["species"] == "":
             info["species"] = "Mus musculus"
-        if age is not None:
-            dob = datetime.datetime.combine(
-                data_date - datetime.timedelta(days=int(age[1:-2])),
-                datetime.time(),
-                tzlocal(),
-            )
+        dob = None
+        if age is not None and len(age) > 2:
+            print("age: ", age)
+            r_age = re_pnd.match(age)
+            if r_age is not None:
+                if r_age.group(1) is not None:
+                    age = int(r_age.group(1))
+
+                if int(age) < 1200:
+                    dob = datetime.datetime.combine(
+                        data_date - datetime.timedelta(days=int(age)),
+                        datetime.time(),
+                        tzlocal(),
+                    )
         # dobstr = dob.strftime("%d/%m/%Y%Z")
-        else:
-            dob = None
         if "mouse" in info["species"] or "Mouse" in info["species"]:
             info["species"] = "Mus musculus"
-        subject_id = info["animal identifier"]
+        subject_id = info.get("animal identifier", "No ID")
         dset = Path(path_to_cell).parts
         if subject_id.strip() in [None, "?", "", "NA"]:
             subject_id = str(Path(dset[-2]))
@@ -409,13 +493,13 @@ class ACQ4toNWB:
         # populate the NWB subject object from the acq4 metadata
 
         subject = NWB.file.Subject(
-            age=self.ISO8601_age(info["age"]),
+            age=self.ISO8601_age(info.get("age", "P0D")),
             description=info["strain"],
-            genotype=info["genotype"],
-            sex=info["sex"],
-            species=info["species"],
+            genotype=info.get("genotype", "Unknown"),
+            sex=info.get("sex", "U"),
+            species=info.get("species", "Unknown"),
             subject_id=subject_id,
-            weight=info["weight"],
+            weight=info.get("weight", 0.0),
             date_of_birth=dob,
         )
 
@@ -461,6 +545,7 @@ class ACQ4toNWB:
                 "Kline, Amber",
                 "Tsukano, Hiroaki",
                 "Kato, Hirouki",
+                "Acosta, Hailey"
                 "Manis, Paul B.",
             ],
             lab="Manis Lab",
@@ -486,7 +571,9 @@ class ACQ4toNWB:
 
             protocol = protocol.strip()
             path_to_protocol = Path(path_to_cell, protocol)
-            print(f"    Datafile: {path_to_protocol!s}\n{" "*14:s}Exists: {path_to_protocol.is_dir()!s}")
+            print(
+                f"    Datafile: {path_to_protocol!s}\n{' '*14:s}Exists: {path_to_protocol.is_dir()!s}"
+            )
 
             # get the protocol data set
             self.AR.setProtocol(Path(path_to_cell, protocol))
@@ -576,7 +663,7 @@ class ACQ4toNWB:
         # make the electrode
         elec1 = NWB.icephys.IntracellularElectrode(
             name=rec_name,
-            description=f"Sutter 1.5 mm patch as intracellular electrode: {self.day_index['internal']:s}",
+            description=f"Sutter 1.5 mm patch as intracellular electrode: {self.day_index.get('internal', 'unknown'):s}",
             cell_id=f"{slicen:s}_{cell:s}",
             filtering=str(datainfo[1]["ClampState"]["ClampParams"]["PrimarySignalLPF"]),
             device=device,
@@ -592,7 +679,7 @@ class ACQ4toNWB:
 
         print("    # sweeps: ", self.AR.cmd_wave.shape[0])
         for sweepno in range(self.AR.cmd_wave.shape[0]):
-            
+
             match recording_mode:
                 case "CC":
                     istim = NWB.icephys.CurrentClampStimulusSeries(
@@ -861,7 +948,9 @@ class ACQ4toNWB:
         #  laser scanning:
         if self.AR.getLaserBlueCommand():
             if self.laser_device is None:
-                self.laser_device = self.NWBFile.create_device(name="Oxxius Laser", description="450 nm 70 mW single-photon Laser")
+                self.laser_device = self.NWBFile.create_device(
+                    name="Oxxius Laser", description="450 nm 70 mW single-photon Laser"
+                )
             scinfo = self.AR.getScannerPositions()
             sites = [self.AR.scanner_info[spot]["pos"] for spot in self.AR.scanner_info.keys()]
             for i, site in enumerate(sites):
@@ -921,8 +1010,12 @@ class ACQ4toNWB:
         if self.AR.getLEDCommand():
             light_source = "470 nm Thorlabs LED"
             if self.LED_device is None:
-                self.LED_device = self.NWBFile.create_device(name=f"{light_source:s}", description="Widefield LED")
-            sites = [[0,0]]*np.array(self.AR.LED_Raw).shape[0]  # also possible to get fov from acq4... 
+                self.LED_device = self.NWBFile.create_device(
+                    name=f"{light_source:s}", description="Widefield LED"
+                )
+            sites = [[0, 0]] * np.array(self.AR.LED_Raw).shape[
+                0
+            ]  # also possible to get fov from acq4...
             spotsize = 1e-4  # 100 microns.
             control_description = "Widefield LED through objective"
 
@@ -969,7 +1062,16 @@ class ACQ4toNWB:
 
 # Read the data back in
 def validate(testpath, nwbfile):
-    with NWBHDF5IO(testpath, "r") as io:
+    """validate Compare the data in memory with what has been written to the disk file
+
+    Parameters
+    ----------
+    testpath : path to the data file on disk
+        _description_
+    nwbfile : nwb structure in memory
+        _description_
+    """
+    with NWBHDF5IO(path=testpath, mode="r") as io:
         infile = io.read()
 
         # assert intracellular_recordings
@@ -1060,16 +1162,18 @@ def ConvertFile(
     filename: Union[str, Path],
     protocols: list,
     appendmode: bool = False,
-    outputpath: str = "test_data",
+    output_path: Union[str, Path] = None,
     device="MultiClamp1.ma",
     mode="CC",
 ):
     # experiment_name = None
-    A2N = ACQ4toNWB(outputpath)
+    assert output_path is not None
+    A2N = ACQ4toNWB(output_path=output_path)
     A2N.set_amplifier_name(device)
     NWBFile = A2N.acq4tonwb(
         experiment_name=experiment_name,
         path_to_cell=filename,
+        output_path=output_path,
         protocols=protocols,
         appendmode=appendmode,
         recordingmode=mode,
@@ -1078,7 +1182,65 @@ def ConvertFile(
     return NWBFile
 
 
-def main():
+def select(protocols: list):
+    ok_prots = []
+    for protocol in protocols:
+        if (
+            protocol.startswith("CCIV")
+            or protocol.startswith("Map")
+            or protocol.startswith("Vc_LED")
+            or protocol.startswith("Ic_LED")
+            or protocol.startswith("VC_LED")
+        ):
+            ok_prots.append(protocol)
+    return ok_prots
+
+
+def cvt(
+    row,
+    experiment_name,
+    output_path: Union[str, Path] = None,
+    rigs: Union[Tuple, List] = None,
+    row_num: int = 0,
+):
+    """Do the file conversion for each complete data set in a given database row
+
+    Args:
+        row (Pandas row (series)): A row containing information about the day
+    """
+
+    path = row.data_directory
+    day = row.date
+    if rigs is not None:  # restrict by rig
+        rig_ok = False
+        for rig in rigs:
+            if day.startswith(rig):  # only do data from a given rig.
+                rig_ok = True
+        if not rig_ok:
+            print(f"Rig ok NOT: {rig:s} in {rigs!s}")
+            return None, None  # did not match rigs
+    slice = row.slice_slice
+    cell = row.cell_cell
+    protocols = row.data_complete.split(",")
+    protocols = [p.strip() for p in protocols if p.strip() not in [" ", "", None]]
+    protocols = select(protocols)
+    if len(protocols) == 0:
+        print(f"{day}{slice}{cell} No protocols:")
+        return None, None
+    print("\nCell id: ", row.cell_id, " index: ", row_num)
+    print("     Protocols: ", protocols)
+    filename = Path(path, day, slice, cell)
+    NWBFile = ConvertFile(
+        experiment_name=experiment_name,
+        filename=filename,
+        output_path=output_path,
+        protocols=protocols,
+    )
+    # NWBFiles.append(NWBFile)
+    return NWBFile, filename
+
+
+def main(output_path: Union[str, Path], experiment_name:str):
     """Read the pandas database for this set of experiments.
     The pandas database is generated by dataSummary.py (from github.com/pbmanis/ephys/util).
     This database is a complete record of the experiments, not filtered by any criteria.
@@ -1090,90 +1252,86 @@ def main():
 
     HK_db = pd.read_pickle(
         # "/Users/pbmanis/Desktop/Python/HK_Collab/datasets/HK_fastcortex_cortex.pkl"
-        # "/Users/pbmanis/Desktop/Python/HK_Collab/datasets/HK_fastcortex_DCN.pkl"
+        "/Users/pbmanis/Desktop/Python/HK_Collab/datasets/DCN_IC_inj/DCN_IC_inj.pkl"
         # "/Users/pbmanis/Desktop/Python/HK_Collab/datasets/Thalamocortical/HK_TC_datasummary-2024.02.10.pkl"
-        "/Users/pbmanis/Desktop/Python/HK_Collab/datasets/HK_CRH-Cre/HK_TC_datasummary-2025.04.21.pkl"
+        # "/Users/pbmanis/Desktop/Python/HK_Collab/datasets/HK_CRH-Cre/HK_CRH-Cre_datasummary-2025.04.21.pkl"
     )
-    experiment_name = "HK_CRH-Cre"
-    print("Converting acq4 to NWB from database: ", HK_db.cell_id)
-
-    def select(protocols: list):
-        ok_prots = []
-        for protocol in protocols:
-            if (
-                protocol.startswith("CCIV")
-                or protocol.startswith("Map")
-                or protocol.startswith("Vc_LED")
-                or protocol.startswith("Ic_LED")
-                or protocol.startswith("VC_LED")
-            ):
-                ok_prots.append(protocol)
-        return ok_prots
+    print("Converting acq4 to NWB from database: \n", HK_db.cell_id)
 
     NWBFiles = []
     files = []
+    #             results: dict = {}
+    #             tasks = dict(zip(range(len(validivs)), validivs))
+    #             result = [None] * len(tasks)
+    # nworkers = 12
+    # with concurrent.futures.ProcessPoolExecutor(max_workers=nworkers) as executor:
+    #     print("   Submitting execution to concurrent futures")
+    #     futures = [
+    #         executor.submit(
+    #             concurrent_iv_analysis,
+    #             self,
+    #             icell,
+    #             i,  # index into the task/validivs list
+    #             x,  # the actual valid iv (protocol) run
+    #             cell_directory,
+    #             validivs,   # I expect that this doesn't need to be passed... 
+    #             additional_iv_records,
+    #             nfiles,
+    #         )
+    #         for i, x in enumerate(tasks)
+    #     ]
+    #     for i, future in enumerate(concurrent.futures.as_completed(futures)):
+    #         result, nfiles = future.result()
+    #         # print(result.keys())
+    #         # print(result['protocol'])
+    #         results[result['protocol']] = result
+    #     if len(results) == 0 or self.dry_run:
+    #         return
 
-    def cvt(row, experiment_name, rigs: Union[Tuple, List] = None, row_num: int = 0):
-        """Do the file conversion for each complete data set in a given database row
-
-        Args:
-            row (Pandas row (series)): A row containing information about the day
-        """
-
-        path = row.data_directory
-        day = row.date
-        if rigs is not None:  # restrict by rig
-            rig_ok = False
-            for rig in rigs:
-                if day.startswith(rig):  # only do data from a given rig.
-                    rig_ok = True
-            if not rig_ok:
-                return  # did not match rigs
-        slice = row.slice_slice
-        cell = row.cell_cell
-        protocols = row.data_complete.split(",")
-        protocols = [p.strip() for p in protocols if p.strip() not in [" ", "", None]]
-        protocols = select(protocols)
-        if len(protocols) == 0:
-            return
-        print("\nCell id: ", row.cell_id,  " index: ", row_num)
-        print("     Protocols: ", protocols)
-        file = Path(path, day, slice, cell)
-        files.append(file)
-        NWBFile = ConvertFile(experiment_name=experiment_name, filename=file, protocols=protocols)
-        NWBFiles.append(NWBFile)
 
     for index in HK_db.index:
-        if index <= 64:  # just for a test...
-            continue
+        # if index < 88:  # just for a test...
+        #     continue
         print(HK_db.iloc[index].cell_id)
-        cvt(HK_db.iloc[index], experiment_name, rigs=["Rig2", "Rig4"], row_num=index)
+        nwbfile, filename = cvt(
+            HK_db.iloc[index],
+            experiment_name,
+            output_path=output_path,
+            rigs=None,  #
+            #     ["Rig2", "Rig4"],
+            row_num=index,
+        )
+        if nwbfile is None:
+            continue
+        NWBFiles.append(nwbfile)
+        files.append(filename)
+        print("NWB file: ", filename)
+        # print("NWB file: ", nwbfile)
+        # validate(nwbfile, nwbfile)
 
-    # HK_db = HK_db.apply(cvt, axis=1, experiment_name=experiment_name, rig="Rig2")
-    # check the files:
-    print("\n", "=" * 80)
-    # ConvertFile.validate(NWBFile[0])
 
 def check_conversion(nwbf):
     try:
         results = list(inspect_nwbfile(nwbfile_path=nwbf))
         if len(results) == 0:
-            print("    Conversion OK")
+            print("    Conversion OK for file: ", nwbf)
         else:
-            print(f"    Error in conversion detected: for file {i:d}: {nwbf!s} ")
+            print(f"    Error in conversion detected: for file: {nwbf!s} ")
             print(results)
-            exit()
+            # exit()
     except:
         print(f"    Error in conversion detected: for file  {nwbf!s} ")
         print(results)
         exit()
 
-def check_conversions():
-    print("Checking conversions")
+
+def check_conversions(output_path: Union[str, Path], dataset: str = "HK_CRH-Cre"):
+    print("=" * 80)
+    print(f"Checking conversion for dataset: {dataset:s}")
     NWBFiles = []
-    filepath = "/Users/pbmanis/Desktop/Python/Dandi/test_data"
-    for f in Path(filepath).rglob("*.nwb"):
-        NWBFiles.append(f)
+    for f in Path(output_path).rglob("*.nwb"):
+        if f.name.startswith(dataset):
+            NWBFiles.append(f)
     # print("NWBFiles: ", NWBFiles)
     for i, nwbf in enumerate(NWBFiles):
         if nwbf is None:
@@ -1182,6 +1340,75 @@ def check_conversions():
 
 
 if __name__ == "__main__":
-    main()  # convert a bunch of files
-    # check_conversions()
-    # check_conversion("/Users/pbmanis/Desktop/Python/Dandi/test_data/Thalamocortical~Rig2~2023.03.31~S01C00.nwb")  # check the conversion
+    parser = argparse.ArgumentParser(
+        description="Convert acq4 data to NWB format",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        type=str,
+        default="001422",
+        dest="dataset",
+        help="Dataset number (e.g. 001422: CRH_Cre, 000407: Thalamocortical, 001423: CN-IC)",
+    )
+    parser.add_argument(
+        "-c",
+        "--convert",
+        default=False,
+        action="store_true",
+        help="Convert the files to nwb format",
+    )
+    parser.add_argument(
+        "-v",
+        "--verify",
+        default=False,
+        action="store_true",
+        help="Verify the converted files",
+    )
+    parser.add_argument(
+        "-s",
+        '--spotcheck',
+        type=str,
+        default=None,
+        action="store",
+        help="Spot check the converted files",
+    )
+    parser.add_argument(
+        "-u",
+        "--upload",
+        default=False,
+        action="store_true",
+        help="Upload to the Dandi archive",
+    )
+    args = parser.parse_args()
+    datasets = {'001422': "HK_CRH-Cre",
+                '000407': "Thalamocortical",
+                '001423': "HK_CN_IC",
+
+    }
+    id = args.dataset
+    if id not in datasets.keys():
+        print(f"Dataset {id} not found")
+        print(f"Available datasets: {datasets.keys()}")
+        exit()
+
+    
+    output_path = Path("/Users/pbmanis/Desktop/Python/Dandi", datasets[id])
+    if args.convert:
+        main(output_path, experiment_name=datasets[id])  # convert a bunch of files
+    if args.verify:
+        check_conversions(output_path=output_path, dataset=datasets[id])
+    if args.spotcheck is not None:
+        check_conversion(Path(output_path, args.spotcheck))  # check the conversion
+    if args.upload:
+        # upload to dandi
+        import subprocess
+        local_path = f"{str(Path(output_path.parent, id)):s}"
+        print("archive path on local disk: ", local_path)
+        print("output path: ", output_path)
+        subprocess.call(["dandi", "download", f"https://dandiarchive.org/dandiset/{id:s}/draft"])
+        cmd = ["dandi", "organize",  f"{output_path!s}", "-f", "dry"]
+        subprocess.call(cmd, text=True, cwd=f"{id:s}" )   # dry run to see if it works
+        subprocess.call(["dandi", "organize", f'{output_path!s}'], cwd=f"{id:s}")
+        subprocess.call(["dandi",  "validate"], cwd=f"{id:s}")
+        subprocess.call(["dandi", "upload"], cwd=f"{id:s}")
+        
