@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 requires = ["setuptools"]
 
 [project]
-name = "dandi"
+name = "dandi_acq4"
 version = "0.2.0"
 description = "Process datasets for DANDI"
 readme = "README.md"
@@ -12,8 +12,55 @@ authors = [
     {name = "Paul Manis", email = "pmanis@med.unc.edu"},
     {name = "Paul B. Manis", email = "pmanis@med.unc.edu"},
 ]
-requires-python = "==3.13.3"
-dependencies = []
+requires-python = "==3.13.7"
+dependencies = [
+    "black>=24.10.0",
+    "colorcet",
+    "colormaps",
+    "cython==3.0.12",
+    "dandi==0.68.0",
+    "dandischema==0.11.0",
+    "dill==0.3.8",
+    "docutils>=0.21.2",
+    "elephant==0.10.0",
+    "flake8",
+    "gitpython",
+    "hdmf>=4.0.0",
+    "isort>=5.13.2",
+    "jupyterlab>=3.2.0",
+    "lmfit==1.3.3",
+    "matplotlib>=3.5.0",
+    "matplotlib-scalebar>=0.8.1",
+    "meegkit==0.1.9",
+    "metaarray==2.2.2",
+    "mypy>=1.13",
+    "nbconvert",
+    "numba>=0.61.2",
+    "numpy>=2.2",
+    "obspy==1.4.2",
+    "pandas>=2.2.3",
+    "pandoc",
+    "pint>=0.24.2",
+    "pyabf",
+    "pylibrary",
+    "pynwb>3",
+    "pypdf",
+    "pyqt6>=6.4.0",
+    "pyqt6-sip>=13.4.0",
+    "pyqtgraph==0.13.7",
+    "pytest>=7.3.1",
+    "quantities>=0.12.1",
+    "scikit-learn==1.6",
+    "scipy>=1.15.2",
+    "seaborn>=0.11.0",
+    "shapely",
+    "sphinx>=8.2.3",
+    "sympy",
+    "tifffile",
+    "toml==0.10.2",
+    "vulture",
+    "xlrd>=1.0.0",
+]
 
 license = "MIT"
 classifiers = [
@@ -28,8 +75,25 @@ classifiers = [
 [project.urls]
 Homepage = "http://github.com/pbmanis/dandi"
 
+[project.scripts]
+acq4_to_nwb = "src.acq4_to_nwb:main"
+display_acq4 = "display_acq4:main"
+display_nwb = "src.display_nwb:main"
+
+
+
 [tool.pdm]
 distribution = false
 
+[tool.setuptools]
+packages = ["src"]
+
 [tool.setuptools.dynamic]
 dependencies = { file = ["requirements.txt"]}
+
+[tool.uv.extra-build-dependencies]
+dandi_acq4 = ["numpy"]
+
+[tool.uv.sources]
+# ephys = { git = "https://github.com/pbmanis/ephys.git", branch="main" }
+pylibrary = { git = "https://github.com/pbmanis/pylibrary.git" }
