@@ -12,7 +12,7 @@ test_data_dcn/
 # jupyter lab files
 jupyter-nwb/
 config/dandi_configuration.cfg
-
+NWBFiles/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
