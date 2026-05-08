@@ -153,7 +153,7 @@ UPLOAD TO DANDI
 ```
 1. dandi download https://dandiarchive.org/dandiset/<dataset_id>/draft
 2. cd <dataset_id> dandi organize <source_folder> -f dry   # dry run to see if it works
-3. dandi organize <source_folder> 
+3. dandi organize <source_folder>
 4. dandi validate dandi upload
 ``` Support::
     (this is also information that needs to be manually filled out at DANDI)
@@ -186,10 +186,17 @@ from typing import List, Literal, Tuple, Union
 import numpy as np
 import pynwb as NWB
 from dateutil.tz import tzlocal
-from ephys import datareaders as DR
+
+# from ephys import datareaders as DR
 from nwbinspector import inspect_all, inspect_nwbfile
 from pynwb import NWBHDF5IO
 from pynwb.core import DynamicTable, VectorData
+import pyqtgraph.configfile
+from src.acq4_reader import acq4_reader
+from pylibrary.tools import cprint
+CP = cprint.cprint
+
+config = pyqtgraph.configfile.readConfigFile("config/dandi_configuration.cfg")
 
 # re_datasets = re.compile(r"^([a-z_]){1,3}", re.IGNORECASE) # (?P<id>)[0-9]{6}$", re.IGNORECASE)  # match the acq4 data files
 
@@ -232,20 +239,24 @@ class ExperimentInfo:
     subject: str = ""
 
 
-print("acq4tonwb")
-
-
 class ACQ4toNWB:
-    def __init__(self, output_path: Union[str, Path, None] = None):
+    def __init__(
+        self,
+        output_path: Union[str, Path, None] = None,
+        overwrite: bool = False,
+        testmode: bool = False,
+    ):
         """Convert a file from ACQ4 (www.acq4.org) format to NWB format (www.nwb.org)
         See the documentation above for the mapping between these formats.
 
         Args:
             out_file_path (Union[str, Path, None], optional): The path to the output files. Defaults to None.
         """
-        self.AR = DR.acq4_reader.acq4_reader()  # get acq4 reader from the ephys package.
+        self.AR = acq4_reader()  # get acq4 reader from the ephys package.
 
         self.out_file_path = output_path
+        self.overwrite = overwrite
+        self.testmode = testmode
         # All of the data here is single electrode, and "MultiClamp1.ma" is the
         # name of the data file holding the ephys data. The ".ma" acq4 files are held in "metaarray" format, but
         # these are basically hdf5 files. They are accompanied by .index files with additional metadata.
@@ -402,6 +413,8 @@ class ACQ4toNWB:
         outfilename: Union[Path, str, None] = None,
         appendmode: bool = False,
         recordingmode: Literal["IC", "CC", "VC", "I=0"] = "CC",
+        dataset: dict = None,
+
     ):
         """Convert one cell directory to an NWB file.
         The NWB file will contain all of the recordings from ONE cell.
@@ -417,6 +430,16 @@ class ACQ4toNWB:
                 None indicates failure to read the data.
                 an outputfile indicates conversion success.
         """
+        keywords = dataset.get("keywords", None)
+        experimenters = dataset.get("experimenters", None)
+        experiment_description = dataset.get("experiment_description", None)
+        iacuc_protocols = dataset.get("iacuc_protocols", None)
+        assert keywords is not None, "List of keywords must be specified"
+        assert experimenters is not None, "List of experimenters/authors must be specified"
+        assert (
+            experiment_description is not None
+        ), "Experiment Description (grant number) must be specified"
+        assert iacuc_protocols is not None, "IACUC protocol(s) must be specified"
         assert output_path is not None, "Output path must be specified"
         rig_id = self.find_name_in_path(path_to_cell, "Rig")
         expt_id = self.find_name_in_path(path_to_cell, experiment_name)
@@ -429,6 +452,16 @@ class ACQ4toNWB:
             )
 
         print("NWB filename: ", outfilename)
+        if outfilename.is_file() and not self.overwrite:
+            print(f"File {outfilename} already exists and overwrite is False. Skipping conversion.")
+            return outfilename
+        if self.overwrite and not self.testmode:
+            print(
+                f"File {outfilename} already exists but overwrite is True\n   Testmode is true, Would overwrite file but testing"
+            )
+        if self.testmode:
+            return outfilename
+
         # Read the acq4 index metadata for the day info, the current slice, and the current cell.
         # assumes that the currdir is the cell directory.
         info = self.AR.readDirIndex(currdir=path_to_cell.parent.parent)["."]
@@ -450,7 +483,7 @@ class ACQ4toNWB:
         data_date = datetime.date.fromtimestamp(info["__timestamp__"])
 
         # get the cell file metadata and clean up the representation.
-        age = self.ISO8601_age(info.get("age", None))
+        age = self.ISO8601_age(info.get("age", "P0D"))
         if "sex" not in info.keys() or info["sex"] == "":
             info["sex"] = "U"
         else:
@@ -494,7 +527,7 @@ class ACQ4toNWB:
 
         subject = NWB.file.Subject(
             age=self.ISO8601_age(info.get("age", "P0D")),
-            description=info["strain"],
+            description=info.get("strain", "Unknown"),
             genotype=info.get("genotype", "Unknown"),
             sex=info.get("sex", "U"),
             species=info.get("species", "Unknown"),
@@ -520,37 +553,14 @@ class ACQ4toNWB:
             session_start_time=datetime.datetime.fromtimestamp(info["__timestamp__"], tz=tzlocal()),
             session_id=f"{session_id:s}",
             session_description=info["description"],
-            keywords=[
-                "mouse",
-                "intracellular recording",
-                "channelrhodopsins",
-                "pathway tracing",
-                "auditory cortex",
-                "auditory thalamus",
-                "medial geniculate",
-                "inferior colliculus",
-                "brachium of the inferior colliculus",
-                "cochlear nucleus",
-                "dorsal cochlear nucleus",
-                "AAV",
-                "synaptic potentials",
-                "optogenetics",
-            ],
+            keywords=keywords,
             notes=f"Cell Type: {ctypes:s}\n" + info["notes"],
-            protocol="21.123",  # str(path_to_cell.name),
+            protocol=iacuc_protocols,  # str(path_to_cell.name),
             timestamps_reference_time=datetime.datetime.now(tzlocal()),
-            experimenter=[
-                "Kasten, Michael R.",
-                "Garcia, Michelee",
-                "Kline, Amber",
-                "Tsukano, Hiroaki",
-                "Kato, Hirouki",
-                "Acosta, Hailey"
-                "Manis, Paul B.",
-            ],
+            experimenter=experimenters,
             lab="Manis Lab",
             institution="UNC Chapel Hill",
-            experiment_description="1 R01 RF1NS128873",  # Kato/Manis grant.
+            experiment_description=experiment_description,  # grant.
             subject=subject,
         )
 
@@ -633,16 +643,16 @@ class ACQ4toNWB:
 
         match recording_mode:
             case "CC":
-                stim_name = f"{protocol:s}:Ics{electrode:d}"
-                rec_name = f"{protocol:s}:Vcs{electrode:d}"
-                opto_name = f"{protocol:s}:OptoSeries"
+                stim_name = f"{protocol:s}_Ics{electrode:d}"
+                rec_name = f"{protocol:s}_Vcs{electrode:d}"
+                opto_name = f"{protocol:s}_OptoSeries"
                 stim_units = "amperes"
                 rec_units = "volts"
 
             case "VC":
-                stim_name = f"{protocol:s}:Vcs{electrode:d}"
-                rec_name = f"{protocol:s}:Ics{electrode:d}"
-                opto_name = f"{protocol:s}:OptoSeries"
+                stim_name = f"{protocol:s}_Vcs{electrode:d}"
+                rec_name = f"{protocol:s}_Ics{electrode:d}"
+                opto_name = f"{protocol:s}_OptoSeries"
                 stim_units = "volts"
                 rec_units = "amperes"
 
@@ -1163,20 +1173,21 @@ def ConvertFile(
     protocols: list,
     appendmode: bool = False,
     output_path: Union[str, Path] = None,
-    device="MultiClamp1.ma",
-    mode="CC",
+    dataset: dict = None,
+    overwrite: bool = False,
 ):
     # experiment_name = None
     assert output_path is not None
-    A2N = ACQ4toNWB(output_path=output_path)
-    A2N.set_amplifier_name(device)
+    A2N = ACQ4toNWB(output_path=output_path, overwrite=overwrite)
+    A2N.set_amplifier_name(dataset['device'])
     NWBFile = A2N.acq4tonwb(
         experiment_name=experiment_name,
         path_to_cell=filename,
         output_path=output_path,
         protocols=protocols,
         appendmode=appendmode,
-        recordingmode=mode,
+        recordingmode=dataset['mode'],
+        dataset=dataset,
     )
     print("NWB file written:  ", NWBFile)
     return NWBFile
@@ -1200,8 +1211,11 @@ def cvt(
     row,
     experiment_name,
     output_path: Union[str, Path] = None,
+    dataset: dict = None,
+    exclusions: dict = None,
     rigs: Union[Tuple, List] = None,
     row_num: int = 0,
+    overwrite: bool = False,
 ):
     """Do the file conversion for each complete data set in a given database row
 
@@ -1227,20 +1241,37 @@ def cvt(
     if len(protocols) == 0:
         print(f"{day}{slice}{cell} No protocols:")
         return None, None
+    dsc = f"{day}/{slice}/{cell}"
+    ds = f"{day}/{slice}"
+    if dsc in exclusions.keys() or ds in exclusions.keys():
+        if protocols in ['all', 'All']:
+            CP("m", f"{dsc} Excluded all protocols")
+            return None, None
+        else:
+            CP("m", f"{dsc} Excluded protocols: {exclusions[dsc]!s}")
+            protocols = [p for p in protocols if p not in exclusions[dsc]['protocols']]
+            if len(protocols) == 0:
+                CP("m", f"{dsc} No protocols left after exclusion")
+                return None, None
+
     print("\nCell id: ", row.cell_id, " index: ", row_num)
     print("     Protocols: ", protocols)
     filename = Path(path, day, slice, cell)
     NWBFile = ConvertFile(
         experiment_name=experiment_name,
+        dataset=dataset,
         filename=filename,
         output_path=output_path,
         protocols=protocols,
+        overwrite=overwrite,
     )
     # NWBFiles.append(NWBFile)
     return NWBFile, filename
 
 
-def main(output_path: Union[str, Path], experiment_name:str):
+def HK_output(
+    output_path: Union[str, Path], experiment_name: str, dataset: dict, exclusions: dict, overwrite: bool = False
+):
     """Read the pandas database for this set of experiments.
     The pandas database is generated by dataSummary.py (from github.com/pbmanis/ephys/util).
     This database is a complete record of the experiments, not filtered by any criteria.
@@ -1274,7 +1305,7 @@ def main(output_path: Union[str, Path], experiment_name:str):
     #             i,  # index into the task/validivs list
     #             x,  # the actual valid iv (protocol) run
     #             cell_directory,
-    #             validivs,   # I expect that this doesn't need to be passed... 
+    #             validivs,   # I expect that this doesn't need to be passed...
     #             additional_iv_records,
     #             nfiles,
     #         )
@@ -1288,7 +1319,6 @@ def main(output_path: Union[str, Path], experiment_name:str):
     #     if len(results) == 0 or self.dry_run:
     #         return
 
-
     for index in HK_db.index:
         # if index < 88:  # just for a test...
         #     continue
@@ -1297,9 +1327,82 @@ def main(output_path: Union[str, Path], experiment_name:str):
             HK_db.iloc[index],
             experiment_name,
             output_path=output_path,
+            dataset=dataset,
+            exclusions=exclusions,
             rigs=None,  #
             #     ["Rig2", "Rig4"],
             row_num=index,
+            overwrite=overwrite,
+        )
+        if nwbfile is None:
+            continue
+        NWBFiles.append(nwbfile)
+        files.append(filename)
+        print("NWB file: ", filename)
+        # print("NWB file: ", nwbfile)
+        # validate(nwbfile, nwbfile)
+
+
+def RJE_output(output_path: Union[str, Path], experiment_name: str, overwrite: bool = False):
+    """Read the pandas database for this set of experiments.
+    The pandas database is generated by dataSummary.py (from github.com/pbmanis/ephys/util).
+    This database is taken from the selected cells that met criteria for analysis.
+    Each row of the database corresponds to one day's recordings - usually one subject
+    The column "data_complete" holds the list of protocols that were completed and are
+    potentially suitable for further analysis.
+    """
+    import pandas as pd
+
+    RJE_db = pd.read_pickle(
+        # "/Users/pbmanis/Desktop/Python/HK_Collab/datasets/HK_fastcortex_cortex.pkl"
+        "/Users/pbmanis/Desktop/Python/HK_Collab/datasets/DCN_IC_inj/DCN_IC_inj.pkl"
+        # "/Users/pbmanis/Desktop/Python/HK_Collab/datasets/Thalamocortical/HK_TC_datasummary-2024.02.10.pkl"
+        # "/Users/pbmanis/Desktop/Python/HK_Collab/datasets/HK_CRH-Cre/HK_CRH-Cre_datasummary-2025.04.21.pkl"
+    )
+    print("Converting acq4 to NWB from database: \n", RJE_db.cell_id)
+
+    NWBFiles = []
+    files = []
+    #             results: dict = {}
+    #             tasks = dict(zip(range(len(validivs)), validivs))
+    #             result = [None] * len(tasks)
+    # nworkers = 12
+    # with concurrent.futures.ProcessPoolExecutor(max_workers=nworkers) as executor:
+    #     print("   Submitting execution to concurrent futures")
+    #     futures = [
+    #         executor.submit(
+    #             concurrent_iv_analysis,
+    #             self,
+    #             icell,
+    #             i,  # index into the task/validivs list
+    #             x,  # the actual valid iv (protocol) run
+    #             cell_directory,
+    #             validivs,   # I expect that this doesn't need to be passed...
+    #             additional_iv_records,
+    #             nfiles,
+    #         )
+    #         for i, x in enumerate(tasks)
+    #     ]
+    #     for i, future in enumerate(concurrent.futures.as_completed(futures)):
+    #         result, nfiles = future.result()
+    #         # print(result.keys())
+    #         # print(result['protocol'])
+    #         results[result['protocol']] = result
+    #     if len(results) == 0 or self.dry_run:
+    #         return
+
+    for index in RJE_db.index:
+        # if index < 88:  # just for a test...
+        #     continue
+        print(RJE_db.iloc[index].cell_id)
+        nwbfile, filename = cvt(
+            RJE_db.iloc[index],
+            experiment_name,
+            output_path=output_path,
+            rigs=None,  #
+            #     ["Rig2", "Rig4"],
+            row_num=index,
+            overwrite=overwrite,
         )
         if nwbfile is None:
             continue
@@ -1339,16 +1442,17 @@ def check_conversions(output_path: Union[str, Path], dataset: str = "HK_CRH-Cre"
         check_conversion(nwbf)
 
 
-if __name__ == "__main__":
+def main():
+
     parser = argparse.ArgumentParser(
         description="Convert acq4 data to NWB format",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
         type=str,
-        default="001422",
+        default="HK_CN_IC",
         dest="dataset",
-        help="Dataset number (e.g. 001422: CRH_Cre, 000407: Thalamocortical, 001423: CN-IC)",
+        help=f"Dataset name (e.g. {list(config.keys())!s})",
     )
     parser.add_argument(
         "-c",
@@ -1356,6 +1460,13 @@ if __name__ == "__main__":
         default=False,
         action="store_true",
         help="Convert the files to nwb format",
+    )
+    parser.add_argument(
+        "-o",
+        "--overwrite",
+        default=False,
+        action="store_true",
+        help="Overwrite existing nwb files (if not set, will skip conversion if nwb file already exists)",
     )
     parser.add_argument(
         "-v",
@@ -1366,7 +1477,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "-s",
-        '--spotcheck',
+        "--spotcheck",
         type=str,
         default=None,
         action="store",
@@ -1379,36 +1490,60 @@ if __name__ == "__main__":
         action="store_true",
         help="Upload to the Dandi archive",
     )
+    parser.add_argument(
+        "-t",
+        "--testmode",
+        default=False,
+        action="store_true",
+        help="Run in test mode (only test conversion for a few files, and don't upload to dandi)",
+    )
     args = parser.parse_args()
-    datasets = {'001422': "HK_CRH-Cre",
-                '000407': "Thalamocortical",
-                '001423': "HK_CN_IC",
-
-    }
+    print("Arguments: ", args)
     id = args.dataset
-    if id not in datasets.keys():
+    if id not in config.keys():
         print(f"Dataset {id} not found")
-        print(f"Available datasets: {datasets.keys()}")
+        print(f"Available datasets: {config.keys()}")
         exit()
-
-    
-    output_path = Path("/Users/pbmanis/Desktop/Python/Dandi", datasets[id])
+    else:
+        print(f"Dataset {id} found: {config[id]!s}")
+    experiment_config = pyqtgraph.configfile.readConfigFile(config[id]["configfile"])['experiments'][id]
+    exclusions = experiment_config['excludeIVs']
+    output_path = Path("/Users/pbmanis/Desktop/Python/Dandi", config[id]["dataset_id"])
     if args.convert:
-        main(output_path, experiment_name=datasets[id])  # convert a bunch of files
+        if id in ["HK_CRH-Cre", "HK_TC", "DCN_IC_inj"]:
+            HK_output(
+                output_path=output_path,
+                dataset=config[id],
+                experiment_name=id,
+                overwrite=args.overwrite,
+                exclusions=exclusions,
+            )
+        elif id in ["DCN_IC_inj"]:
+            RJE_output(
+                output_path=output_path,
+                dataset=config[id],
+                experiment_name=id,
+                overwrite=args.overwrite,
+                exclusions=exclusions,
+            )   
     if args.verify:
-        check_conversions(output_path=output_path, dataset=datasets[id])
+        check_conversions(output_path=output_path, dataset=config[id]["dataset_id"])
     if args.spotcheck is not None:
         check_conversion(Path(output_path, args.spotcheck))  # check the conversion
     if args.upload:
         # upload to dandi
         import subprocess
+
         local_path = f"{str(Path(output_path.parent, id)):s}"
         print("archive path on local disk: ", local_path)
         print("output path: ", output_path)
         subprocess.call(["dandi", "download", f"https://dandiarchive.org/dandiset/{id:s}/draft"])
-        cmd = ["dandi", "organize",  f"{output_path!s}", "-f", "dry"]
-        subprocess.call(cmd, text=True, cwd=f"{id:s}" )   # dry run to see if it works
-        subprocess.call(["dandi", "organize", f'{output_path!s}'], cwd=f"{id:s}")
-        subprocess.call(["dandi",  "validate"], cwd=f"{id:s}")
+        cmd = ["dandi", "organize", f"{output_path!s}", "-f", "dry"]
+        subprocess.call(cmd, text=True, cwd=f"{id:s}")  # dry run to see if it works
+        subprocess.call(["dandi", "organize", f"{output_path!s}"], cwd=f"{id:s}")
+        subprocess.call(["dandi", "validate"], cwd=f"{id:s}")
         subprocess.call(["dandi", "upload"], cwd=f"{id:s}")
-        
+
+
+if __name__ == "__main__":
+    main()
