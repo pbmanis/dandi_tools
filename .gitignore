@@ -11,6 +11,8 @@ src/tutorial_test.py
 test_data_dcn/
 # jupyter lab files
 jupyter-nwb/
+config/dandi_configuration.cfg
+
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
