@@ -8,13 +8,13 @@ import argparse
 from pathlib import Path
 from typing import Union
 
-import ephys.ephysanalysis as EP
+
 import numpy as np
 from dateutil.tz import tzlocal
-from ephys.tools import tifffile
+from src import acq4_reader, tifffile
 from nwbinspector import inspect_all, inspect_nwb
 
-AR = EP.acq4read.Acq4Read()
+AR = acq4_reader.Acq4Read()
 
 class EvalImages():
     def __init__(self, topdir:Path):
