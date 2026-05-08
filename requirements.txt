@@ -1,5 +1,4 @@
-# Python 3.9+ with basic working environment
-# Used by make_env.sh
+# Python 3.13+ with basic working environment
 
 # development utilities
 black>=24.10.0
@@ -49,7 +48,7 @@ seaborn>=0.11.0
 tifffile
 toml==0.10.2
 xlrd>=1.0.0
-MetaArray==2.1.1
+MetaArray==2.2.2
 obspy==1.4.1  # for resampling and filtering
 meegkit==0.1.9 # some filtering and baseline adjustments translated from Python originally from Alain de Cheveigné 
 colormaps
