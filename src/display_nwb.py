@@ -72,7 +72,7 @@ class ReadNWB:
         -------
         Tuple[str, str, str, str]: protocol, sweep, protonum, recmode
         """
-        print("acqname: ", acqname)
+        # print("acqname: ", acqname)
         acqdict = acq_re.match(acqname).groupdict()
         recmode = self.nwbfile.acquisition[acqname].comments
         return acqdict["protocol"], acqdict["sweep"], acqdict["name"], recmode
@@ -129,6 +129,9 @@ class ReadNWB:
         io = NWBHDF5IO(Path(f), mode="r")
         nwbfile = io.read()
         self.nwbfile = nwbfile
+        print(dir(nwbfile))
+        exit()
+        
         di = nwbfile.get_intracellular_recordings()
         root_table = nwbfile.get_icephys_meta_parent_table()
         # print("Root table : ", root_table.neurodata_type)
@@ -183,8 +186,15 @@ class ReadNWB:
         self.protocols = (
             {}
         )  # dict pointing to each recording/stimulating dataset for a given protocol
-
+        ordered_protocols = [None]*len(acquisition_names)  # we will populate this with the protocols in the order they appear in the acquisition list
         for acq in acquisition_names:
+            protocol, sweep, acqname, recmode = self.split_acqname(acq)
+            # print("sweep: ", sweep, "protocol: ", protocol)
+            ordered_protocols[int(sweep)] = acq
+
+        for acq in ordered_protocols:
+            if acq is None:
+                continue
             protocol, sweep, acqname, recmode = self.split_acqname(acq)
             # print("acq: ", acq, "acqname: ", acqname, "protocol: ", protocol, "recmode: ", recmode)
             if protocol not in self.protocols:
@@ -220,19 +230,45 @@ class ReadNWB:
     ):
         """add the data from this protocol to the dataclass object"""
         # print("\nNWB_FILE: ", dir(nwbfile))
+        print("\nProtocol: ", protocol.nwb_name.split("~")[0])
+        acq_proto = "_".join(protocol.nwb_name.split("_")[:-1])
         recmode = nwbfile.acquisition[protocol.nwb_name].comments
-        acquisition_names = nwbfile.acquisition.keys()
-        stimulus_names = nwbfile.stimulus.keys()
+        acquisition_names = list(nwbfile.acquisition.keys())
+        stimulus_names = list(nwbfile.stimulus.keys())
+        # remove protocols in the acquisition keys that are not in the current protocol
+        acquisition_names = [a for a in acquisition_names if a.startswith(acq_proto)]
         # print("\nstimulus names: ", stimulus_names)
         # print("\ne stim dict: ", e_stimdict)
         # print("\no stim dict: ", o_stimdict)
         # look up the matching e and o stimuli
+        # sort the order to match the order of the acquisition in acq4
+
+        unique_protocols = set(['_'.join(x.split('_')[:-1]) for x in acquisition_names])
+        thisproto = unique_protocols.pop()
+        unique_stim_protocols = set(['_'.join(x.split('_')[:-1]) for x in stimulus_names])
+        # match with acquisition - find the stim with the same protocol name
+        thisproto_stim = None
+        for sp in unique_stim_protocols:
+            if sp.startswith(thisproto.split('~')[0]):
+                thisproto_stim = sp
+                break
+        # sort the acquisition and stimulus names by the sweep number, which is the last part of the name after the last underscore
+        acq_order = sorted([int(x.split('_')[-1]) for x in acquisition_names if x.startswith(thisproto)])
+        for n in acq_order:
+            aname = "_".join([thisproto, str(n)])
+            acquisition_names[n] = aname
+            sname = "_".join([thisproto_stim, str(n)])
+            stimulus_names[n] = sname
+        # for i, a in enumerate(acquisition_names):
+        #     print("acq: ", a, "stim: ", stimulus_names[i])
+        # for i, x in enumerate(acq_order):
+        #     print(i, x, acquisition_names[i], stimulus_names[i])
 
         for i, acq in enumerate(acquisition_names):
             if not acq.startswith(
                 protocol.protocol
-            ):  # filter to get data from our current protocol
-                # print("\nacq; ", acq, "protocol: ", protocol)
+            ):  # filter to get data just from the current protocol
+                # print("\nacq protocol not in list ", acq, "protocol: ", protocol.protocol)
                 continue
             # print("\nacq name: ", acq, protocol.nwb_name)
             protocol_name, sweep, acqname, recmode = self.split_acqname(acq)
@@ -248,7 +284,6 @@ class ReadNWB:
                 optospot = o_spotdict[(protocol_name, sweep)]
             # print("estim: ", estim, "\noptostim: ", optostim)
             # print("add_protocol: ", optospot )
-
             if recmode in ["CC", "IC"]:  # get command and response data
                 response = np.array(nwbfile.acquisition[acq].data)
                 command = np.array(nwbfile.stimulus[estim].data)
@@ -305,8 +340,7 @@ class ReadNWB:
         self.sample_rate = self.nwbfile.acquisition[
             protocol.nwb_name
         ].rate  # data sample rate in Hz
-        print("sample rate: ", self.sample_rate)
-        print(protocol.response.shape, protocol.command.shape)
+        print("    Sample rate: ", self.sample_rate)
         self.protocol = nwbfile.protocol
         # print("Response shape: ", protocol.response.shape)
         if protocol.response.ndim == 1:  # handle special case where there is just one trace.
@@ -375,6 +409,7 @@ class ReadNWB:
         else:
             raise ValueError(f"Protocol starting with : {protocol.protocol:s} not handled.")
         # print("protocol reponse shape: ", protocol.response.shape)
+
         for i in range(protocol.response.shape[0]):
             axs["A"].plot(protocol.timebase, protocol.response[i, :] + i * delta_I, linewidth=0.33)
             axs["B"].plot(protocol.timebase, protocol.command[i, :], linewidth=0.33)
@@ -439,8 +474,8 @@ class ReadNWB:
 
         mpl.show()
 
+def main():
 
-if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Display an NWB file")
     parser.add_argument(dest="inputfile", type=str, help="input filename")
     args = parser.parse_args()
@@ -450,3 +485,6 @@ if __name__ == "__main__":
     print("trying")
     R = ReadNWB(args.inputfile)
     # R.plot_traces()
+
+if __name__ == "__main__":
+    main()
