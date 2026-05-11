@@ -155,11 +155,12 @@ UPLOAD TO DANDI
 2. cd <dataset_id> dandi organize <source_folder> -f dry   # dry run to see if it works
 3. dandi organize <source_folder>
 4. dandi validate dandi upload
+
 ``` Support::
     (this is also information that needs to be manually filled out at DANDI)
 
     NIH grants:
-    DC RF1 NS128873 (Kato, Manis, MPI, 2022-) Cortical circuits for the integration of parallel short-latency auditory pathways.
+    DC RF1 NS128873 (Kato, Manis/Kasten, MPI, 2022-) Cortical circuits for the integration of parallel short-latency auditory pathways.
     DC R01 DC019053 (Manis, 2020-2025) Cellular mechanisms of auditory information processing.
 
     Ethics:
@@ -206,18 +207,102 @@ config = pyqtgraph.configfile.readConfigFile("config/dandi_configuration.cfg")
 # print(m.groups())
 # print(m.group("id"))  # should be 001422
 
-re_pnd = re.compile(r"^[P]{0,1}([0-9]{1,9})[D]{0,1}$", re.IGNORECASE)  # match the acq4 data files
-# tests:
-# d = re_pnd.match("P30D")
-# print("P30D:" , d)
-# d = re_pnd.match("")
-# print("no entry: ", d)
-# d = re_pnd.match("P30")
-# print("P30: ", d)
-# d = re_pnd.match("30")
-# print("30: ", d)
-# exit()
+re_pnd = re.compile(r"^[P]{0,1}(?P<age>[0-9]{1,9})\s*(?P<greaterthan>[\+\>]{0,1})\s*(?P<ish>[ish\?]{0,3})\s*(?P<unit>[DYMW]{0,1})$", re.IGNORECASE)  # match the acq4 data files
 
+def ISO8601_age(agestr, strict: bool = False):
+    """Convert free-form age designators to ISO standard, e.g.:
+        postnatal day 30 mouse = P30D  (or P30W, or P3Y)
+        Ranges are P1D/P3D if bounded, or P12D/ if not known but have lower bound.
+
+    Params:
+        agestr (str): age string from the file
+
+    Returns:
+        str: sanitized age string
+    """
+    # if strict:
+    #     if agestr.find("ish")>=0 or agestr.find("?")>=0:
+    #         print(f"Age with 'ish or '?' is not a valid age descriptor; please fix in the acq4 data. {agestr:s}"
+    #         )
+    if agestr == '':
+        agestr = 'P0D'
+    age_match = re_pnd.match(agestr)
+    if age_match is None:
+        print(f"Age string '{agestr:s}' is not in a recognized format; please fix in the acq4 data.")
+        raise ValueError(f"Age string {agestr:s} is not in a recognized format; please fix in the acq4 data.")
+    # print(age_match)
+    # print(age_match.groups())
+    # print("\n", agestr)
+    # print('age: ', age_match.group("age"), "greaterthan: ", age_match.group("greaterthan"), "ish: ", age_match.group("ish"), "unit: ", age_match.group("unit"))
+    if age_match.group("unit") is None or age_match.group("unit") == "":
+        unit = 'D'
+    else:
+        unit = age_match.group("unit").upper()
+    if age_match['greaterthan'] is not None and age_match['greaterthan'] != "":
+        unit += "/" # add the upper bound to the string
+    if age_match['ish'] is not None and age_match['ish'] != "":
+        if age_match['ish'] == 'ish':
+            unit += "~"  # add the "ish" to the string
+        elif age_match['ish'] == '?':
+            unit += "?"  # add the "?" to the string
+    agestr = 'P' + age_match['age'] + unit
+    # print("agestr: ", agestr)
+    return agestr
+
+def weight_with_units(weight):
+    """Convert free-form weight designators to a standard format, e.g.:
+        20 g, 20g, 20 grams, 0.02 kg, etc. -> 20 g
+    """
+    if isinstance(weight, int):  # convert to string and add suffix
+        weight = f"{float(weight):.1f} g"
+        return weight
+
+    elif isinstance(weight, float):  # convert to string and add suffix
+        weight = f"{weight:.1f} g"
+        return weight
+
+    elif not isinstance(weight, str) or weight is None:
+        weight = "0.0 g"  # can't interpret weight, set to 0 g
+        return weight
+
+    elif isinstance(weight, str):
+        re_weight = re.compile(r"(?P<value>\d+\.?\d*)\s*(?P<unit>kg|g|grams)?", re.IGNORECASE)
+        wgroups = re_weight.match(weight.lower())
+        if wgroups is None:
+            weight = "0.0 g"
+            return weight
+        if wgroups:
+            value = float(wgroups.group("value"))
+            unit = wgroups.group("unit")
+            if unit == "kg":  # reexpress in grams
+                value *= 1000
+                unit = "g"
+            if unit in ["g", "grams", None, ""]:
+                unit = "g"
+            weight = f"{value} {unit}"
+            return weight
+        else:
+            raise ValueError(f"Warning: weight '{weight}' is not in a recognized format, no group")
+    raise ValueError(f"Warning: weight '{weight}' is not in any recognized format")
+    
+def age_tests():
+    # tests:
+    px = [
+        ('P30D', 'P30D'),
+        ('30D', 'P30D'),
+        ('P150+D', 'P150D/'),
+        ('P150 +', 'P150D/'),
+        ('P150 ish', 'P150D~'),
+        ("P23?", "P23D?"),
+ 
+    ]
+    for p in px:
+        d = ISO8601_age(p[0], strict=True)
+        print(f"d: [{p[0]}], {d}")
+        assert d == p[1], f"Test failed for {p[0]}: expected {p[1]}, got {d}"
+
+# age_tests()
+# exit()
 
 def def_lister():
     return []
@@ -344,32 +429,8 @@ class ACQ4toNWB:
         """
         self.AR.setDataName(amplifier_name)
 
-    def ISO8601_age(self, agestr, strict: bool = False):
-        """Convert free-form age designators to ISO standard, e.g.:
-            postnatal day 30 mouse = P30D  (or P30W, or P3Y)
-            Ranges are P1D/P3D if bounded, or P12D/ if not known but have lower bound.
 
-        Params:
-            agestr (str): age string from the file
 
-        Returns:
-            str: sanitized age string
-        """
-
-        agestr = agestr.replace("p", "P")
-        agestr = agestr.replace("d", "D")
-        if strict:
-            if agestr.find("ish") or agestr.find("?"):
-                raise ValueError(
-                    "Age with 'ish or '?' is not a valid age descriptor; please fix in the acq4 data."
-                )
-        if "P" not in agestr:
-            agestr = "P" + agestr
-        if "D" not in agestr:
-            agestr = agestr + "D"
-        if agestr == "PD":
-            agestr = "P9999D"  # no age specified
-        return agestr
 
     def find_name_in_path(self, sourcepath: Union[str, Path], name: Union[str, None] = None):
         """find_name_in_path Search the path string for a name, and return the name if found.
@@ -444,52 +505,38 @@ class ACQ4toNWB:
         rig_id = self.find_name_in_path(path_to_cell, "Rig")
         expt_id = self.find_name_in_path(path_to_cell, experiment_name)
         if outfilename is None:
-            Path(output_path).mkdir(parents=True, exist_ok=True)
-            print(f"Output path {output_path} is not an existing directory, creating it.")
+            if not Path(output_path).exists():
+                print(f"Output path {output_path} is not an existing directory, creating it.")
+                Path(output_path).mkdir(parents=True, exist_ok=True)
             outfilename = Path(
                 output_path,
                 self._get_short_name(path_to_cell, expt_id, rig_id) + ".nwb",
             )
 
         print("NWB filename: ", outfilename)
-        if outfilename.is_file() and not self.overwrite:
-            print(f"File {outfilename} already exists and overwrite is False. Skipping conversion.")
-            return outfilename
-        if self.overwrite and not self.testmode:
-            print(
-                f"File {outfilename} already exists but overwrite is True\n   Testmode is true, Would overwrite file but testing"
-            )
-        if self.testmode:
-            return outfilename
+        print("overwrite: ", self.overwrite)
+        print("testmode: ", self.testmode)
 
-        # Read the acq4 index metadata for the day info, the current slice, and the current cell.
+         # Read the acq4 index metadata for the day info, the current slice, and the current cell.
         # assumes that the currdir is the cell directory.
         info = self.AR.readDirIndex(currdir=path_to_cell.parent.parent)["."]
         self.day_index = info
         slice_index = self.AR.readDirIndex(currdir=path_to_cell.parent)["."]
         cell_index = self.AR.readDirIndex(currdir=path_to_cell)["."]
 
-        # We should check for ".mosaic" files in the slice index. If these are present,
-        # they are a pyqtgraph configuration file (renders as a dictionary)
-        # that drives the acq4 mosaic module to "process" the image data.
-        # The mosaic module takes the dictionary, and from the raw image
-        # data, fiduciary points, and some other settings, generates a
-        # an image that can be a reconstruction of the experiment.
-        #
-        # If there is afile with the same name as the mosaic file, then
-        # is an image of the processed images etc., and we will add it to
-        # the repsitory as a single RGB image.
-
         data_date = datetime.date.fromtimestamp(info["__timestamp__"])
-
         # get the cell file metadata and clean up the representation.
-        age = self.ISO8601_age(info.get("age", "P0D"))
+        age = ISO8601_age(info.get("age", "P0D"))
         if "sex" not in info.keys() or info["sex"] == "":
             info["sex"] = "U"
         else:
             info["sex"] = info["sex"].upper()
         if "weight" not in info.keys():
-            info["weight"] = None
+            info["weight"] = "0 g"
+        original_weight = info["weight"]
+        info["weight"] = weight_with_units(info["weight"])
+        CP("c", f"Original weight: {original_weight}, converted weight: {info['weight']}")
+            # raise ValueError(f"Original weight: {original_weight}, converted weight: {info['weight']}")
         if "species" not in info.keys() or info["species"] == "":
             info["species"] = "Mus musculus"
         dob = None
@@ -510,6 +557,53 @@ class ACQ4toNWB:
         if "mouse" in info["species"] or "Mouse" in info["species"]:
             info["species"] = "Mus musculus"
         subject_id = info.get("animal identifier", "No ID")
+        print(f"INFO WEIGHT: <{info['weight']}>")
+        re_w = r"(?P<value>\d+\.?\d*)\s+(?P<unit>kg|g|grams)?"
+        wgroups = re.match(re_w, info["weight"])
+        if wgroups is None:
+            print(f"Weight string '{info['weight']}' is not in a recognized format; please fix in the acq4 data.")
+            raise ValueError(f"Weight string '{info['weight']}' is not in a recognized format; please fix in the acq4 data.")
+        if wgroups:
+            value = float(wgroups.group("value"))
+            if value is None:
+                raise ValueError(f"Weight string '{info['weight']}' is missing a value; please fix in the acq4 data.")
+            unit = wgroups.group("unit")
+            if unit is None:
+                raise ValueError(f"Weight string '{info['weight']}' is missing a unit; please fix in the acq4 data.")
+            if unit == "kg":  # reexpress in grams
+                value *= 1000
+                unit = "g"
+            if unit in ["g", "grams", None, ""]:
+                unit = "g"
+            
+            info["weight"] = f"{value} {unit}"
+        if outfilename.is_file() and not self.overwrite:
+            print(f"File {outfilename} already exists and overwrite is False. Skipping conversion.")
+            return outfilename
+        if self.overwrite and not self.testmode:
+            print(
+                f"File {outfilename} already exists but overwrite is True\n   Testmode is true, Would overwrite file but testing"
+            )
+
+        if not self.overwrite or self.testmode:
+            return outfilename
+
+
+
+        # We should check for ".mosaic" files in the slice index. If these are present,
+        # they are a pyqtgraph configuration file (renders as a dictionary)
+        # that drives the acq4 mosaic module to "process" the image data.
+        # The mosaic module takes the dictionary, and from the raw image
+        # data, fiduciary points, and some other settings, generates a
+        # an image that can be a reconstruction of the experiment.
+        #
+        # If there is afile with the same name as the mosaic file, then
+        # is an image of the processed images etc., and we will add it to
+        # the repsitory as a single RGB image.
+
+
+
+
         dset = Path(path_to_cell).parts
         if subject_id.strip() in [None, "?", "", "NA"]:
             subject_id = str(Path(dset[-2]))
@@ -524,15 +618,16 @@ class ACQ4toNWB:
             info["notes"] = "  No Notes"
 
         # populate the NWB subject object from the acq4 metadata
+  
 
         subject = NWB.file.Subject(
-            age=self.ISO8601_age(info.get("age", "P0D")),
+            age=ISO8601_age(info.get("age", "P0D")),
             description=info.get("strain", "Unknown"),
             genotype=info.get("genotype", "Unknown"),
             sex=info.get("sex", "U"),
             species=info.get("species", "Unknown"),
             subject_id=subject_id,
-            weight=info.get("weight", 0.0),
+            weight=info.get("weight", "0 g"),
             date_of_birth=dob,
         )
 
@@ -643,16 +738,16 @@ class ACQ4toNWB:
 
         match recording_mode:
             case "CC":
-                stim_name = f"{protocol:s}_Ics{electrode:d}"
-                rec_name = f"{protocol:s}_Vcs{electrode:d}"
-                opto_name = f"{protocol:s}_OptoSeries"
+                stim_name = f"{protocol:s}~Ics{electrode:d}"
+                rec_name = f"{protocol:s}~Vcs{electrode:d}"
+                opto_name = f"{protocol:s}~OptoSeries"
                 stim_units = "amperes"
                 rec_units = "volts"
 
             case "VC":
-                stim_name = f"{protocol:s}_Vcs{electrode:d}"
-                rec_name = f"{protocol:s}_Ics{electrode:d}"
-                opto_name = f"{protocol:s}_OptoSeries"
+                stim_name = f"{protocol:s}~Vcs{electrode:d}"
+                rec_name = f"{protocol:s}~Ics{electrode:d}"
+                opto_name = f"{protocol:s}~OptoSeries"
                 stim_units = "volts"
                 rec_units = "amperes"
 
@@ -1338,7 +1433,7 @@ def HK_output(
             continue
         NWBFiles.append(nwbfile)
         files.append(filename)
-        print("NWB file: ", filename)
+        print("ACQ4 source file: ", filename)
         # print("NWB file: ", nwbfile)
         # validate(nwbfile, nwbfile)
 
@@ -1431,11 +1526,14 @@ def check_conversion(nwbf):
 def check_conversions(output_path: Union[str, Path], dataset: str = "HK_CRH-Cre"):
     print("=" * 80)
     print(f"Checking conversion for dataset: {dataset:s}")
+    print(f"   at output path: {output_path!s}")
     NWBFiles = []
+    print(output_path.parent.name)
     for f in Path(output_path).rglob("*.nwb"):
-        if f.name.startswith(dataset):
+        if f.name.startswith(dataset) or f.name.startswith(str(output_path.parent.name)):
             NWBFiles.append(f)
-    # print("NWBFiles: ", NWBFiles)
+    print("NWBFiles: ", NWBFiles)
+
     for i, nwbf in enumerate(NWBFiles):
         if nwbf is None:
             continue
@@ -1498,7 +1596,7 @@ def main():
         help="Run in test mode (only test conversion for a few files, and don't upload to dandi)",
     )
     args = parser.parse_args()
-    print("Arguments: ", args)
+    # print("Arguments: ", args)
     id = args.dataset
     if id not in config.keys():
         print(f"Dataset {id} not found")
@@ -1508,7 +1606,9 @@ def main():
         print(f"Dataset {id} found: {config[id]!s}")
     experiment_config = pyqtgraph.configfile.readConfigFile(config[id]["configfile"])['experiments'][id]
     exclusions = experiment_config['excludeIVs']
-    output_path = Path("/Users/pbmanis/Desktop/Python/Dandi", config[id]["dataset_id"])
+    output_path =       Path("/Users/pbmanis/Desktop/Python/Dandi_acq4", config[id]['output_dir'], config[id]["dataset_id"])
+    dandi_output_path = Path("/Users/pbmanis/Desktop/Python/Dandi_acq4", config[id]['dandi_output_dir'], config[id]["dataset_id"])
+    print(f"Output path: {output_path!s}")
     if args.convert:
         if id in ["HK_CRH-Cre", "HK_TC", "DCN_IC_inj"]:
             HK_output(
@@ -1534,16 +1634,37 @@ def main():
         # upload to dandi
         import subprocess
 
-        local_path = f"{str(Path(output_path.parent, id)):s}"
+        local_path = f"{str(Path(dandi_output_path.parent, id)):s}"
         print("archive path on local disk: ", local_path)
-        print("output path: ", output_path)
+        print("Dandi output path: ", output_path)
+        # exit()
         subprocess.call(["dandi", "download", f"https://dandiarchive.org/dandiset/{id:s}/draft"])
         cmd = ["dandi", "organize", f"{output_path!s}", "-f", "dry"]
         subprocess.call(cmd, text=True, cwd=f"{id:s}")  # dry run to see if it works
         subprocess.call(["dandi", "organize", f"{output_path!s}"], cwd=f"{id:s}")
         subprocess.call(["dandi", "validate"], cwd=f"{id:s}")
-        subprocess.call(["dandi", "upload"], cwd=f"{id:s}")
+        # subprocess.call(["dandi", "upload"], cwd=f"{id:s}")
 
+
+def test_weight_conversion():
+    A2N = ACQ4toNWB()
+    test_cases = [
+        ('20.0', "20.0 g"),  # string, but no unit: should assume grams
+        ("20 g", "20.0 g"),  #string with unit, just reformat"
+        ("20g", "20.0 g"),  # string with unit, but no space: should still work
+        ("20 grams", "20.0 g"), # string with full unit name: make standard format
+        ("0.02 kg", "20.0 g"),  # string with different unit: should convert to grams
+        (20, "20.0 g"),  # int without unit: should assume grams
+        (20.0, "20.0 g"),  # float without unit: should assume grams
+        ("", "0.0 g"),  # empty string: should default to 0 grams
+        (None, "0.0 g"),  # None: should default to 0 grams
+    ]
+    for input_weight, expected_output in test_cases:
+        output = A2N.weight_with_units(input_weight)
+        print("testing weight conversion: ", input_weight, " -> ", output)
+        assert output == expected_output, f"Test failed for input: {input_weight!s}. Expected: {expected_output!s}, got: {output!s}"
+    print("All weight conversion tests passed!")
 
 if __name__ == "__main__":
-    main()
+    # main()
+   print("testing weight:\n", test_weight_conversion())
