@@ -129,9 +129,6 @@ class ReadNWB:
         io = NWBHDF5IO(Path(f), mode="r")
         nwbfile = io.read()
         self.nwbfile = nwbfile
-        print(dir(nwbfile))
-        exit()
-        
         di = nwbfile.get_intracellular_recordings()
         root_table = nwbfile.get_icephys_meta_parent_table()
         # print("Root table : ", root_table.neurodata_type)
