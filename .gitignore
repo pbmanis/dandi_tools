@@ -1,7 +1,6 @@
 # special directories that we don't want to track
 # virtual environment
 
-dandi_venv/
 test_data/
 206452/
 000407/
@@ -136,8 +135,6 @@ target/
 # Jupyter Notebook
 .ipynb_checkpoints
 
-# pyenv
-.python-version
 
 # celery beat schedule file
 celerybeat-schedule
@@ -167,7 +164,3 @@ venv.bak/
 # mypy
 .mypy_cache/
 
-dandi_tools.egg-info
-dandi_venv/bin
-dandi_venv/share
-dandi_venv/pyvenv.cfg
