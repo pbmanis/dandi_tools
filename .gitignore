@@ -21,6 +21,9 @@ __pycache__/
 # temporary ipy/jupyter notebooks
 Untitled*.ipynb
 
+# vscode
+.vscode/
+
 # different temporary visualization files
 *.obj
 *.mtl
@@ -164,5 +167,12 @@ venv.bak/
 # mypy
 .mypy_cache/
 
+<<<<<<< HEAD
 001423/dandiset.yaml
 mosaic_test/
+=======
+dandi_tools.egg-info
+dandi_venv/bin
+dandi_venv/share
+dandi_venv/pyvenv.cfg
+>>>>>>> c0616495123772d5c961b02debe08cf03ea208ea
