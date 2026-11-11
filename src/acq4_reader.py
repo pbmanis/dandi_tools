@@ -1464,6 +1464,9 @@ class acq4_reader:
                 exit(1)
             self.LaserBlue_sample_rate.append(sr)
         self.LaserBlue_Info = info
+        # keep the waveforms for every sweep (in sweep directory order) as well as the first
+        self.LaserBlue_Raw_sweeps = list(self.LaserBlue_Raw)
+        self.LaserBlue_pCell_sweeps = list(self.LaserBlue_pCell)
         self.LaserBlue_Raw = np.array(self.LaserBlue_Raw[0])
         self.LaserBlue_pCell = np.array(self.LaserBlue_pCell[0])
         self.LaserBlue_sample_rate = np.array(self.LaserBlue_sample_rate)
@@ -1627,7 +1630,7 @@ class acq4_reader:
                 pass
 
             target = target + 1
-            if target > ntargets:  # wrap for repetitions
+            if target >= ntargets:  # wrap for repetitions
                 target = 0
                 rep = rep + 1
         # print(n_valid_targets)

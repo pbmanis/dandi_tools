@@ -115,23 +115,23 @@ NWBFile expects: class pynwb.file.NWBFile(
 
     Mapping this to the NWB structure:
         1. Experimental conditions table - not used here.
-        2. Repetitions Table: Should represent the repetitions of a protocol.
-        3. Sequential Recordings Table: Should represent the sweeps within a
-           repetition (usually parametric
-        variation of current, laser spot position, or other stimulus parameter).
-        This corresponds to a "protocol" in the acq4 structure. 4. Simultaneous
-        Recordings Table: Should represent the simultaneous recordings from
-        multiple electrodes. We are not doing this, and it can be skipped
-        according to the pynwb documentation. 5. Intracellular Recordings Table:
-        mapping recordings from multiple electrodes to the individual
-        intracellular recordings. This is not used here (we are not recording
-        from multiple electrodes). 6. PatchClampSeries: This is the lowest
-        level, that corresponds to a single trial or sweep in acq4 - typically
-        the current or voltage trace, and the stimulus command. This is the
-        level at which we will store the traces.
+        2. Repetitions Table: one row for each protocol type, holding the
+           repeats of that protocol (e.g., CCIV_long_000 and CCIV_long_001).
+        3. Sequential Recordings Table: one row for each acq4 "protocol",
+           holding its sweeps (usually parametric variation of current, laser
+           spot position, or other stimulus parameter).
+        4. Simultaneous Recordings Table: one row per sweep. We record from a
+           single electrode, so each row holds one intracellular recording.
+        5. Intracellular Recordings Table: one row per sweep, pairing the
+           stimulus and response series with the electrode (one electrode per
+           amplifier channel for the cell).
+        6. PatchClampSeries: This is the lowest level, that corresponds to a
+           single trial or sweep in acq4 - typically the current or voltage
+           trace, and the stimulus command. This is the level at which we
+           store the traces.
 
-        Also included are optical stimluation data, stored in ogen structures
-        (data and series).
+        Also included are optical stimulation data, stored in ogen structures
+        (OptogeneticStimulusSite and OptogeneticSeries).
 
 We use the NAME of each entry to parse and reassemble the data for display. See
 display_nwb.py for an example of how we use this. The name is formatted as a
@@ -176,6 +176,7 @@ ROR.org id: https://ror.org/0130frc33
 """
 
 import argparse
+import collections
 import concurrent.futures
 import datetime
 import uuid
@@ -189,7 +190,7 @@ import pynwb as NWB
 from dateutil.tz import tzlocal
 
 # from ephys import datareaders as DR
-from nwbinspector import inspect_all, inspect_nwbfile
+from nwbinspector import Importance, inspect_all, inspect_nwbfile, load_config
 from pynwb import NWBHDF5IO
 from pynwb.core import DynamicTable, VectorData
 import pyqtgraph.configfile
@@ -197,7 +198,25 @@ from src.acq4_reader import acq4_reader
 from pylibrary.tools import cprint
 CP = cprint.cprint
 
-config = pyqtgraph.configfile.readConfigFile("config/dandi_configuration.cfg")
+# the project directory (holds src/ and config/); relative paths in the configuration
+# are relative to this directory.
+project_root = Path(__file__).resolve().parent.parent
+default_config_file = Path(project_root, "config", "dandi_configuration.cfg")
+
+
+def read_config(config_file: Union[str, Path, None] = None) -> dict:
+    """Read the dataset configuration file (pyqtgraph configfile format)
+
+    Args:
+        config_file: the configuration file. Defaults to config/dandi_configuration.cfg
+            in the project directory.
+    """
+    config_file = Path(config_file) if config_file is not None else default_config_file
+    if not config_file.is_file():
+        raise FileNotFoundError(
+            f"Configuration file {config_file!s} not found; see config/dandi_example_configuration.cfg"
+        )
+    return pyqtgraph.configfile.readConfigFile(str(config_file))
 
 # re_datasets = re.compile(r"^([a-z_]){1,3}", re.IGNORECASE) # (?P<id>)[0-9]{6}$", re.IGNORECASE)  # match the acq4 data files
 
@@ -207,102 +226,103 @@ config = pyqtgraph.configfile.readConfigFile("config/dandi_configuration.cfg")
 # print(m.groups())
 # print(m.group("id"))  # should be 001422
 
-re_pnd = re.compile(r"^[P]{0,1}(?P<age>[0-9]{1,9})\s*(?P<greaterthan>[\+\>]{0,1})\s*(?P<ish>[ish\?]{0,3})\s*(?P<unit>[DYMW]{0,1})$", re.IGNORECASE)  # match the acq4 data files
+re_pnd = re.compile(
+    r"^P?(?P<age>[0-9]{1,9})\s*(?P<greaterthan>[\+\>]?)\s*(?P<ish>ish|\?)?\s*(?P<unit>[DYMW]?)$",
+    re.IGNORECASE,
+)  # match the acq4 age strings
+age_unit_days = {"D": 1.0, "W": 7.0, "M": 30.44, "Y": 365.25}
 
-def ISO8601_age(agestr, strict: bool = False):
-    """Convert free-form age designators to ISO standard, e.g.:
+
+def parse_age(agestr):
+    """Parse free-form age designators, e.g.:
         postnatal day 30 mouse = P30D  (or P30W, or P3Y)
-        Ranges are P1D/P3D if bounded, or P12D/ if not known but have lower bound.
+        An age with a lower bound only (P150+) becomes the open interval P150D/.
+        Approximate ages (P150ish, P23?) are not valid ISO 8601, so the qualifier
+        is returned separately and the ISO age is given without it.
 
     Params:
         agestr (str): age string from the file
 
     Returns:
-        str: sanitized age string
+        tuple: (ISO 8601 age string, or None if no age was given,
+                age in days, or None if the age is not exact,
+                list of qualifiers: "lower bound", "approximate")
     """
-    # if strict:
-    #     if agestr.find("ish")>=0 or agestr.find("?")>=0:
-    #         print(f"Age with 'ish or '?' is not a valid age descriptor; please fix in the acq4 data. {agestr:s}"
-    #         )
-    if agestr == '':
-        agestr = 'P0D'
-    age_match = re_pnd.match(agestr)
+    if agestr is None or str(agestr).strip() == "":
+        return None, None, []
+    age_match = re_pnd.match(str(agestr).strip())
     if age_match is None:
-        print(f"Age string '{agestr:s}' is not in a recognized format; please fix in the acq4 data.")
-        raise ValueError(f"Age string {agestr:s} is not in a recognized format; please fix in the acq4 data.")
-    # print(age_match)
-    # print(age_match.groups())
-    # print("\n", agestr)
-    # print('age: ', age_match.group("age"), "greaterthan: ", age_match.group("greaterthan"), "ish: ", age_match.group("ish"), "unit: ", age_match.group("unit"))
-    if age_match.group("unit") is None or age_match.group("unit") == "":
-        unit = 'D'
-    else:
-        unit = age_match.group("unit").upper()
-    if age_match['greaterthan'] is not None and age_match['greaterthan'] != "":
-        unit += "/" # add the upper bound to the string
-    if age_match['ish'] is not None and age_match['ish'] != "":
-        if age_match['ish'] == 'ish':
-            unit += "~"  # add the "ish" to the string
-        elif age_match['ish'] == '?':
-            unit += "?"  # add the "?" to the string
-    agestr = 'P' + age_match['age'] + unit
-    # print("agestr: ", agestr)
-    return agestr
+        raise ValueError(f"Age string {agestr!s} is not in a recognized format; please fix in the acq4 data.")
+    unit = (age_match["unit"] or "D").upper()
+    iso_age = f"P{age_match['age']:s}{unit:s}"
+    age_days = int(age_match["age"]) * age_unit_days[unit]
+    qualifiers = []
+    if age_match["greaterthan"]:
+        iso_age += "/"  # ISO 8601 interval with an open upper bound
+        qualifiers.append("lower bound")
+        age_days = None
+    if age_match["ish"]:
+        qualifiers.append("approximate")
+        age_days = None
+    return iso_age, age_days, qualifiers
+
+
+def ISO8601_age(agestr):
+    """Convert free-form age designators to an ISO 8601 duration (see parse_age)"""
+    return parse_age(agestr)[0]
+
+
+def sex_code(sex):
+    """Map free-form sex designators to the NWB/DANDI codes M, F, O or U"""
+    sex = str(sex).strip().upper() if sex is not None else ""
+    if sex[:1] in ["M", "F", "O", "U"]:
+        return sex[:1]
+    return "U"
+
+
+re_weight = re.compile(r"^\s*(?P<value>\d+\.?\d*)\s*(?P<unit>kg|grams|g)?", re.IGNORECASE)
+
 
 def weight_with_units(weight):
     """Convert free-form weight designators to a standard format, e.g.:
-        20 g, 20g, 20 grams, 0.02 kg, etc. -> 20 g
+        20 g, 20g, 20 grams, 0.02 kg, 20 -> "20.0 g"
+    Returns None if the weight is missing, zero (not measured), or cannot be interpreted.
     """
-    if isinstance(weight, int):  # convert to string and add suffix
-        weight = f"{float(weight):.1f} g"
-        return weight
-
-    elif isinstance(weight, float):  # convert to string and add suffix
-        weight = f"{weight:.1f} g"
-        return weight
-
-    elif not isinstance(weight, str) or weight is None:
-        weight = "0.0 g"  # can't interpret weight, set to 0 g
-        return weight
-
+    if isinstance(weight, (int, float)):
+        value = float(weight)
     elif isinstance(weight, str):
-        re_weight = re.compile(r"(?P<value>\d+\.?\d*)\s*(?P<unit>kg|g|grams)?", re.IGNORECASE)
-        wgroups = re_weight.match(weight.lower())
+        wgroups = re_weight.match(weight)
         if wgroups is None:
-            weight = "0.0 g"
-            return weight
-        if wgroups:
-            value = float(wgroups.group("value"))
-            unit = wgroups.group("unit")
-            if unit == "kg":  # reexpress in grams
-                value *= 1000
-                unit = "g"
-            if unit in ["g", "grams", None, ""]:
-                unit = "g"
-            weight = f"{value} {unit}"
-            return weight
-        else:
-            raise ValueError(f"Warning: weight '{weight}' is not in a recognized format, no group")
-    raise ValueError(f"Warning: weight '{weight}' is not in any recognized format")
-    
-def age_tests():
-    # tests:
-    px = [
-        ('P30D', 'P30D'),
-        ('30D', 'P30D'),
-        ('P150+D', 'P150D/'),
-        ('P150 +', 'P150D/'),
-        ('P150 ish', 'P150D~'),
-        ("P23?", "P23D?"),
- 
-    ]
-    for p in px:
-        d = ISO8601_age(p[0], strict=True)
-        print(f"d: [{p[0]}], {d}")
-        assert d == p[1], f"Test failed for {p[0]}: expected {p[1]}, got {d}"
+            return None
+        value = float(wgroups["value"])
+        if (wgroups["unit"] or "g").lower() == "kg":  # reexpress in grams
+            value *= 1000.0
+    else:
+        return None
+    if np.isnan(value) or value <= 0.0:
+        return None
+    return f"{value} g"
 
-# age_tests()
-# exit()
+
+# The acq4 protocols that can be converted, by name prefix:
+#     (recording mode, series description, stimulus type)
+known_protocols = {
+    "CCIV": ("CC", "Current Clamp IV series", "current steps"),
+    "Ic_LED": ("CC", "Current Clamp with LED Illumination for optical stimulation", "LED"),
+    "Map_NewBlueLaser_IC": ("CC", "Current Clamp with Laser scanning photostimulation", "laser scanning"),
+    "VCIV": ("VC", "Voltage Clamp series", "voltage steps"),
+    "Vc_LED": ("VC", "Voltage Clamp with LED Illumination for optical stimulation", "LED"),
+    "VC_LED": ("VC", "Voltage Clamp with LED Illumination for optical stimulation", "LED"),
+    "Map_NewBlueLaser_VC": ("VC", "Voltage Clamp with Laser scanning photostimulation", "laser scanning"),
+}
+
+
+def protocol_type(protocol: str):
+    """Return (recording mode, series description, stimulus type) for a known protocol, or None"""
+    for prefix, ptype in known_protocols.items():
+        if protocol.startswith(prefix):
+            return ptype
+    return None
 
 def def_lister():
     return []
@@ -346,10 +366,9 @@ class ACQ4toNWB:
         # name of the data file holding the ephys data. The ".ma" acq4 files are held in "metaarray" format, but
         # these are basically hdf5 files. They are accompanied by .index files with additional metadata.
         # if a different electrode/amplifier is used, change [1] to [2] etc. in self.ampchannels
-        self.set_amplifier_name("MultiClamp1.ma")
+        self.set_amplifier_name("MultiClamp1.ma")  # also sets self.ampchannels
         self.laser_device = None
         self.LED_device = None
-        self.ampchannels = [1]
         # self.manager = NWB.get_manager()
         self.ID = 0
 
@@ -424,10 +443,18 @@ class ACQ4toNWB:
         in the .index file that is associated with the .ma file.
 
 
+        The amplifier device in acq4 (e.g., "MultiClamp1") is the file name without
+        the extension, and the trailing number is the amplifier channel (electrode).
+
         Args:
-            datatype (str): name of the amplifier
+            amplifier_name (str): name of the amplifier data file, e.g. "MultiClamp1.ma"
         """
         self.AR.setDataName(amplifier_name)
+        amp_match = re.match(r"^(?P<prefix>.*?)(?P<channel>\d+)$", Path(amplifier_name).stem)
+        if amp_match is None:
+            raise ValueError(f"Amplifier name {amplifier_name:s} must end in a channel number, e.g. MultiClamp1.ma")
+        self.amplifier_prefix = amp_match["prefix"]  # e.g. "MultiClamp"
+        self.ampchannels = [int(amp_match["channel"])]
 
 
 
@@ -473,18 +500,15 @@ class ACQ4toNWB:
         output_path: Union[Path, str] = None,
         outfilename: Union[Path, str, None] = None,
         appendmode: bool = False,
-        recordingmode: Literal["IC", "CC", "VC", "I=0"] = "CC",
         dataset: dict = None,
-
     ):
         """Convert one cell directory to an NWB file.
         The NWB file will contain all of the recordings from ONE cell.
+        The recording mode (CC or VC) of each protocol is read from the acq4 data.
 
         Args:
             path_to_cell (string or Path): Full path and name of the cell directory
             outfilename (Union[Path, str, None], optional): NWB output filename. Defaults to None.
-            recordingmode (Literal[&quot;IC&quot;, &quot;CC&quot;, &quot;VC&quot;, &quot;I, optional):
-              _description_. Defaults to 0"]="CC".
 
         Returns:
             None or outputfilename
@@ -502,16 +526,22 @@ class ACQ4toNWB:
         ), "Experiment Description (grant number) must be specified"
         assert iacuc_protocols is not None, "IACUC protocol(s) must be specified"
         assert output_path is not None, "Output path must be specified"
+        # nominal light source powers (W), used to scale the optogenetic command waveforms
+        self.laser_power_W = float(dataset.get("laser_power_W", 0.070))
+        self.led_power_W = float(dataset.get("led_power_W", np.nan))  # NaN if not set
+        path_to_cell = Path(path_to_cell)
+        output_path = Path(output_path)
         rig_id = self.find_name_in_path(path_to_cell, "Rig")
         expt_id = self.find_name_in_path(path_to_cell, experiment_name)
         if outfilename is None:
-            if not Path(output_path).exists():
+            if not output_path.exists():
                 print(f"Output path {output_path} is not an existing directory, creating it.")
-                Path(output_path).mkdir(parents=True, exist_ok=True)
+                output_path.mkdir(parents=True, exist_ok=True)
             outfilename = Path(
                 output_path,
                 self._get_short_name(path_to_cell, expt_id, rig_id) + ".nwb",
             )
+        outfilename = Path(outfilename)
 
         print("NWB filename: ", outfilename)
         print("overwrite: ", self.overwrite)
@@ -524,68 +554,48 @@ class ACQ4toNWB:
         slice_index = self.AR.readDirIndex(currdir=path_to_cell.parent)["."]
         cell_index = self.AR.readDirIndex(currdir=path_to_cell)["."]
 
-        data_date = datetime.date.fromtimestamp(info["__timestamp__"])
+        # The session is the recording from this cell. The day directory timestamp is not
+        # reliable (it can be inherited from an earlier day), and the cell directory
+        # timestamp can be later than its first protocol, so use the earliest of the cell
+        # and protocol directory timestamps.
+        protocol_timestamps = [
+            self.AR.readDirIndex(currdir=Path(path_to_cell, p.strip()))["."]["__timestamp__"]
+            for p in protocols
+        ]
+        self.session_start_ts = min([cell_index["__timestamp__"]] + protocol_timestamps)
+        data_date = datetime.date.fromtimestamp(self.session_start_ts)
         # get the cell file metadata and clean up the representation.
-        age = ISO8601_age(info.get("age", "P0D"))
-        if "sex" not in info.keys() or info["sex"] == "":
-            info["sex"] = "U"
-        else:
-            info["sex"] = info["sex"].upper()
-        if "weight" not in info.keys():
-            info["weight"] = "0 g"
-        original_weight = info["weight"]
-        info["weight"] = weight_with_units(info["weight"])
-        CP("c", f"Original weight: {original_weight}, converted weight: {info['weight']}")
-            # raise ValueError(f"Original weight: {original_weight}, converted weight: {info['weight']}")
+        age, age_days, age_qualifiers = parse_age(info.get("age", None))
+        if age is None:
+            CP("r", f"No age found for {path_to_cell!s}; please fix in the acq4 data.")
+        info["sex"] = sex_code(info.get("sex", ""))
+        weight = weight_with_units(info.get("weight", None))
+        if weight is None:
+            CP(
+                "r",
+                f"No usable weight ('{info.get('weight', '')!s}') for {path_to_cell!s}; please fix in the acq4 data.",
+            )
         if "species" not in info.keys() or info["species"] == "":
             info["species"] = "Mus musculus"
         dob = None
-        if age is not None and len(age) > 2:
-            print("age: ", age)
-            r_age = re_pnd.match(age)
-            if r_age is not None:
-                if r_age.group(1) is not None:
-                    age = int(r_age.group(1))
-
-                if int(age) < 1200:
-                    dob = datetime.datetime.combine(
-                        data_date - datetime.timedelta(days=int(age)),
-                        datetime.time(),
-                        tzlocal(),
-                    )
+        # only compute a date of birth when the age is exact
+        if age_days is not None and age_days < 1200:
+            dob = datetime.datetime.combine(
+                data_date - datetime.timedelta(days=round(age_days)),
+                datetime.time(),
+                tzlocal(),
+            )
         # dobstr = dob.strftime("%d/%m/%Y%Z")
         if "mouse" in info["species"] or "Mouse" in info["species"]:
             info["species"] = "Mus musculus"
         subject_id = info.get("animal identifier", "No ID")
-        print(f"INFO WEIGHT: <{info['weight']}>")
-        re_w = r"(?P<value>\d+\.?\d*)\s+(?P<unit>kg|g|grams)?"
-        wgroups = re.match(re_w, info["weight"])
-        if wgroups is None:
-            print(f"Weight string '{info['weight']}' is not in a recognized format; please fix in the acq4 data.")
-            raise ValueError(f"Weight string '{info['weight']}' is not in a recognized format; please fix in the acq4 data.")
-        if wgroups:
-            value = float(wgroups.group("value"))
-            if value is None:
-                raise ValueError(f"Weight string '{info['weight']}' is missing a value; please fix in the acq4 data.")
-            unit = wgroups.group("unit")
-            if unit is None:
-                raise ValueError(f"Weight string '{info['weight']}' is missing a unit; please fix in the acq4 data.")
-            if unit == "kg":  # reexpress in grams
-                value *= 1000
-                unit = "g"
-            if unit in ["g", "grams", None, ""]:
-                unit = "g"
-            
-            info["weight"] = f"{value} {unit}"
-        if outfilename.is_file() and not self.overwrite:
-            print(f"File {outfilename} already exists and overwrite is False. Skipping conversion.")
-            return outfilename
-        if self.overwrite and not self.testmode:
-            print(
-                f"File {outfilename} already exists but overwrite is True\n   Testmode is true, Would overwrite file but testing"
-            )
-
-        if not self.overwrite or self.testmode:
+        if outfilename.is_file():
+            if not self.overwrite:
+                print(f"File {outfilename} already exists and overwrite is False. Skipping conversion.")
+                return outfilename
+            print(f"File {outfilename} already exists and overwrite is True; it will be replaced.")
+        if self.testmode:
+            print(f"Testmode is True: would write {outfilename}, but skipping conversion.")
             return outfilename
 
 
@@ -606,13 +616,13 @@ class ACQ4toNWB:
 
         dset = Path(path_to_cell).parts
         if subject_id.strip() in [None, "?", "", "NA"]:
-            subject_id = str(Path(dset[-2]))
+            subject_id = str(Path(dset[-3]))  # day directory: one subject per day
         session_id = self._get_short_name(path_to_cell, rig_id=rig_id, expt_id=expt_id)
 
         if "type 1" not in list(cell_index.keys()):
             ctypes = "Not specified"
         else:
-            ctypes = f"{cell_index['type 1']:s} and {cell_index['type 2']:s}"
+            ctypes = f"{cell_index['type 1']:s} and {cell_index.get('type 2', 'Not specified'):s}"
 
         if "notes" not in info.keys():
             info["notes"] = "  No Notes"
@@ -620,14 +630,19 @@ class ACQ4toNWB:
         # populate the NWB subject object from the acq4 metadata
   
 
+        subject_description = info.get("strain", "Unknown")
+        if len(age_qualifiers) > 0:
+            subject_description += (
+                f"; age recorded as '{info['age']!s}' ({', '.join(age_qualifiers):s})"
+            )
         subject = NWB.file.Subject(
-            age=ISO8601_age(info.get("age", "P0D")),
-            description=info.get("strain", "Unknown"),
+            age=age,
+            description=subject_description,
             genotype=info.get("genotype", "Unknown"),
             sex=info.get("sex", "U"),
             species=info.get("species", "Unknown"),
             subject_id=subject_id,
-            weight=info.get("weight", "0 g"),
+            weight=weight,
             date_of_birth=dob,
         )
 
@@ -645,13 +660,12 @@ class ACQ4toNWB:
         # populate the NWB metadata
         self.NWBFile = NWB.NWBFile(
             identifier=str(uuid.uuid4()),  # random uuid for this dataset.
-            session_start_time=datetime.datetime.fromtimestamp(info["__timestamp__"], tz=tzlocal()),
+            session_start_time=datetime.datetime.fromtimestamp(self.session_start_ts, tz=tzlocal()),
             session_id=f"{session_id:s}",
             session_description=info["description"],
             keywords=keywords,
             notes=f"Cell Type: {ctypes:s}\n" + info["notes"],
             protocol=iacuc_protocols,  # str(path_to_cell.name),
-            timestamps_reference_time=datetime.datetime.now(tzlocal()),
             experimenter=experimenters,
             lab="Manis Lab",
             institution="UNC Chapel Hill",
@@ -661,6 +675,10 @@ class ACQ4toNWB:
 
         self.NWBFile.add_device(device)
         self.sweep_counter = 0  # cumulative counter of traces/sweeps that are stored in this file.
+        self.electrodes = {}  # one electrode per amplifier channel for this cell
+        # sequential recordings (one per protocol), grouped by protocol name without the
+        # repeat number, so that repeats of a protocol form one repetition.
+        self.protocol_sequences = {}
 
         # In acq4, data is held in subdirectories, one for each "protocol" that was run.
         # Protocols are named according to their 'function' (the type of manipulation/recording
@@ -683,28 +701,18 @@ class ACQ4toNWB:
             # get the protocol data set
             self.AR.setProtocol(Path(path_to_cell, protocol))
             proto_index = self.AR.readDirIndex(currdir=path_to_protocol)["."]
+            self.get_protocol_data(
+                path_to_cell=Path(path_to_cell),
+                protocol=protocol,
+                proto_index=proto_index,
+                info=info,
+                device=device,
+                protonum=protonum,
+            )
 
-            recordingmode = proto_index["devices"]["MultiClamp1"]["mode"]
-            assert recordingmode in ["IC", "I=0", "CC", "VC"]
-            match recordingmode:
-                case "IC" | "I=0" | "CC":
-                    self.get_CC_data(
-                        path_to_cell=Path(path_to_cell),
-                        protocol=protocol,
-                        info=info,
-                        device=device,
-                        protonum=protonum,
-                    )
-                case "VC":
-                    self.get_VC_data(
-                        path_to_cell=Path(path_to_cell),
-                        protocol=protocol,
-                        info=info,
-                        device=device,
-                        protonum=protonum,
-                    )
-                case _:
-                    print(f"Recording mode {recordingmode:s} is not implemented")
+        # repeats of the same protocol (e.g., CCIV_long_000, CCIV_long_001) form one repetition
+        for sequential_recordings in self.protocol_sequences.values():
+            self.NWBFile.add_icephys_repetition(sequential_recordings=sequential_recordings)
 
         self.NWBFile.generate_new_id()
         with NWB.NWBHDF5IO(str(outfilename), "w") as io:
@@ -722,6 +730,7 @@ class ACQ4toNWB:
         acq4_source_name: str = "MultiClamp1.ma",
         electrode: int = 1,
         protonum: int = 0,
+        stimulus_type: str = "square",
     ):
         """Make NWB intracellular electrophysiology tables from a
         single acq4 current clamp or voltage clamp protocol
@@ -729,6 +738,7 @@ class ACQ4toNWB:
         Args:
             recording_mode: (str): Either CC or VC for current or voltage clamp
             series_description (str): Name for this  series
+            stimulus_type (str): stimulus type for the sequential recordings table
             path_to_cell (Path): full path of the data, from which the protocol is pulled
             info (dict): acq4 "info" block provided with this protocol
             device (NWB.device): NWB device structure
@@ -740,16 +750,18 @@ class ACQ4toNWB:
             case "CC":
                 stim_name = f"{protocol:s}~Ics{electrode:d}"
                 rec_name = f"{protocol:s}~Vcs{electrode:d}"
-                opto_name = f"{protocol:s}~OptoSeries"
                 stim_units = "amperes"
                 rec_units = "volts"
 
             case "VC":
                 stim_name = f"{protocol:s}~Vcs{electrode:d}"
                 rec_name = f"{protocol:s}~Ics{electrode:d}"
-                opto_name = f"{protocol:s}~OptoSeries"
                 stim_units = "volts"
                 rec_units = "amperes"
+
+            case _:
+                print(f"Recording mode {recording_mode:s} not implemented")
+                return None
 
         self.AR.setDataName(acq4_source_name)
         # print(f"\nLooking for a recording from {acq4_source_name:s}")
@@ -762,126 +774,102 @@ class ACQ4toNWB:
             return None
 
         slicen, cell = self._get_slice_cell(f=path_to_cell)
-        for d in self.AR.clampInfo["dirs"]:
-            datainfo = self.AR.getDataInfo(Path(d, self.AR.dataname))
-
-        # make the electrode
-        elec1 = NWB.icephys.IntracellularElectrode(
-            name=rec_name,
-            description=f"Sutter 1.5 mm patch as intracellular electrode: {self.day_index.get('internal', 'unknown'):s}",
-            cell_id=f"{slicen:s}_{cell:s}",
-            filtering=str(datainfo[1]["ClampState"]["ClampParams"]["PrimarySignalLPF"]),
-            device=device,
-        )
-        # self.NWBFile.add_icephys_electrode(elec1)  # not well documented!
-
-        step_times = [
-            np.uint64(self.AR.tstart * self.AR.samp_rate),
-            np.uint64(self.AR.tend * self.AR.samp_rate),
+        nsweeps = self.AR.cmd_wave.shape[0]
+        if len(self.AR.clampInfo["dirs"]) == 0 or nsweeps == 0:
+            print(f"No sweeps found in protocol {protocol:s}: ", path_to_cell)
+            return None
+        # trace_index maps each sweep (row of data_array) to its acq4 sweep directory
+        sweep_dir_index = self.AR.trace_index[:nsweeps]
+        sweep_start_times = [self.AR.trace_StartTimes[i] for i in sweep_dir_index]
+        # clamp settings for each sweep, from that sweep's own data file
+        datainfos = [
+            self.AR.getDataInfo(Path(self.AR.clampInfo["dirs"][i], self.AR.dataname))
+            for i in sweep_dir_index
         ]
+
+        # make the electrode: one per amplifier channel for this cell, shared by all protocols
+        if electrode not in self.electrodes:
+            self.electrodes[electrode] = NWB.icephys.IntracellularElectrode(
+                name=f"electrode{electrode:d}",
+                description=f"Sutter 1.5 mm patch as intracellular electrode: {self.day_index.get('internal', 'unknown'):s}",
+                cell_id=f"{slicen:s}_{cell:s}",
+                filtering=str(datainfos[0][1]["ClampState"]["ClampParams"]["PrimarySignalLPF"]),
+                device=device,
+            )
+        elec1 = self.electrodes[electrode]
+
+        step_description = f"; step from {self.AR.tstart:.4f} s to {self.AR.tend:.4f} s"
+        optical = self.read_optical_stimulation(protocol=protocol)  # once per protocol
 
         recordings = []  # keep a list of the recordings
 
-        print("    # sweeps: ", self.AR.cmd_wave.shape[0])
-        for sweepno in range(self.AR.cmd_wave.shape[0]):
+        print("    # sweeps: ", nsweeps)
+        for sweepno in range(nsweeps):
+            clamp_state = datainfos[sweepno][1]["ClampState"]
+            cparams = clamp_state["ClampParams"]
+            # time of the sweep relative to the session start (timestamps_reference_time)
+            starting_time = float(sweep_start_times[sweepno] - self.session_start_ts)
 
             match recording_mode:
                 case "CC":
-                    istim = NWB.icephys.CurrentClampStimulusSeries(
-                        name=f"{stim_name:s}_{sweepno:d}",  # :sweep{np.uint32(sweepno):d}:protonum{np.uint32(protonum):d}",
+                    stimulus = NWB.icephys.CurrentClampStimulusSeries(
+                        name=f"{stim_name:s}_{sweepno:d}",
                         data=np.array(self.AR.cmd_wave[sweepno, :]),
                         electrode=elec1,
-                        gain=datainfo[1]["ClampState"]["extCmdScale"],  # from acq4
-                        stimulus_description=str(self.AR.protocol.name),
-                        description="Control values are the current injection step times in seconds",
-                        control=step_times,
-                        control_description=["tstart", "tend"],
+                        gain=clamp_state["extCmdScale"],  # from acq4
+                        stimulus_description=protocol,
+                        description=series_description + step_description,
                         comments=recording_mode,
                         unit=stim_units,
-                        starting_time=info["__timestamp__"],
+                        starting_time=starting_time,
                         rate=self.AR.sample_rate[0],
                         sweep_number=np.uint32(sweepno),
                     )
 
-                    vdata = NWB.icephys.CurrentClampSeries(
-                        name=f"{rec_name:s}_{sweepno:d}",  # sweep{np.uint32(sweepno):d}:protonum{np.uint32(protonum):d}",
-                        description=series_description,
-                        data=self.AR.data_array[sweepno, :],
-                        unit=rec_units,
-                        electrode=elec1,
-                        gain=datainfo[1]["ClampState"]["primaryGain"],
-                        bias_current=datainfo[1]["ClampState"]["ClampParams"]["Holding"],
-                        bridge_balance=datainfo[1]["ClampState"]["ClampParams"]["BridgeBalResist"],
-                        capacitance_compensation=datainfo[1]["ClampState"]["ClampParams"][
-                            "NeutralizationCap"
-                        ],
-                        stimulus_description="Current Steps",
-                        conversion=1.0,
-                        timestamps=None,
-                        starting_time=info["__timestamp__"],
-                        rate=self.AR.sample_rate[0],
-                        comments=recording_mode,
-                        control=None,
-                        control_description=None,
-                        sweep_number=np.uint32(sweepno),
-                    )
-
-                    IR_sweep_index = self.NWBFile.add_intracellular_recording(
-                        electrode=elec1,
-                        response=vdata,
-                        stimulus=istim,
-                        id=sweepno + self.sweep_counter,
-                    )
-
-                    odata, osite = self.capture_optical_stimulation(
-                        path_to_cell=path_to_cell,
-                        protocol=protocol,
-                        recording_mode=recording_mode,
-                        sweepno=sweepno,
-                        electrode=elec1,
-                    )
-                    if odata is not None:
-                        self.NWBFile.add_intracellular_recording(
-                            electrode=elec1,
-                            response=vdata,
-                            stimulus=odata,
-                            id=sweepno + self.sweep_counter + 10000,
-                        )
-                        self.NWBFile.add_ogen_site(osite)
-                        ogenseries = NWB.ogen.OptogeneticSeries(
-                            name=f"{opto_name:s}_{sweepno:d}",
-                            description="Optogenetic stimulation",
-                            data=[70.0],
-                            site=osite,
-                            rate=1.0,
-                        )
-                        self.NWBFile.add_stimulus(ogenseries)
-
-                case "VC":
-                    vstim = NWB.icephys.VoltageClampStimulusSeries(
-                        name=f"{stim_name:s}_{sweepno:d}",
-                        stimulus_description=str(self.AR.protocol.name),
-                        description=series_description,
-                        control=step_times,
-                        control_description=["tstart", "tend"],
-                        comments=recording_mode,
-                        data=np.array(self.AR.cmd_wave[sweepno, :]),  # stim_units,
-                        starting_time=info["__timestamp__"],
-                        rate=self.AR.sample_rate[0],
-                        electrode=elec1,
-                        gain=datainfo[1]["ClampState"]["extCmdScale"],
-                        sweep_number=np.uint32(sweepno),
-                    )
-                    cparams = datainfo[1]["ClampState"]["ClampParams"]
-
-                    idata = NWB.icephys.VoltageClampSeries(
+                    response = NWB.icephys.CurrentClampSeries(
                         name=f"{rec_name:s}_{sweepno:d}",
                         description=series_description,
                         data=self.AR.data_array[sweepno, :],
                         unit=rec_units,
                         electrode=elec1,
-                        gain=datainfo[1]["ClampState"]["primaryGain"],
-                        stimulus_description=str(path_to_cell.name),
+                        gain=clamp_state["primaryGain"],
+                        bias_current=cparams["Holding"],
+                        bridge_balance=cparams["BridgeBalResist"],
+                        capacitance_compensation=cparams["NeutralizationCap"],
+                        stimulus_description=protocol,
+                        conversion=1.0,
+                        timestamps=None,
+                        starting_time=starting_time,
+                        rate=self.AR.sample_rate[0],
+                        comments=recording_mode,
+                        sweep_number=np.uint32(sweepno),
+                    )
+
+                case "VC":
+                    stimulus = NWB.icephys.VoltageClampStimulusSeries(
+                        name=f"{stim_name:s}_{sweepno:d}",
+                        stimulus_description=protocol,
+                        description=series_description + step_description,
+                        comments=recording_mode,
+                        data=np.array(self.AR.cmd_wave[sweepno, :]),
+                        unit=stim_units,
+                        starting_time=starting_time,
+                        rate=self.AR.sample_rate[0],
+                        electrode=elec1,
+                        gain=clamp_state["extCmdScale"],
+                        sweep_number=np.uint32(sweepno),
+                    )
+
+                    response = NWB.icephys.VoltageClampSeries(
+                        name=f"{rec_name:s}_{sweepno:d}",
+                        # the holding potential is metadata, not an offset to the recorded current
+                        description=series_description
+                        + f"; holding potential {float(clamp_state['holding']):.4f} V",
+                        data=self.AR.data_array[sweepno, :],
+                        unit=rec_units,
+                        electrode=elec1,
+                        gain=clamp_state["primaryGain"],
+                        stimulus_description=protocol,
                         capacitance_fast=cparams["FastCompCap"],
                         capacitance_slow=cparams["SlowCompCap"],
                         resistance_comp_bandwidth=cparams["RsCompBandwidth"],
@@ -889,280 +877,237 @@ class ACQ4toNWB:
                         resistance_comp_prediction=0.0,  # not recorded in acq4, we rarely use this.
                         whole_cell_capacitance_comp=cparams["WholeCellCompCap"],
                         whole_cell_series_resistance_comp=cparams["WholeCellCompResist"],
-                        resolution=np.NaN,
+                        resolution=np.nan,
                         conversion=1.0,
                         timestamps=None,
-                        starting_time=info["__timestamp__"],
+                        starting_time=starting_time,
                         rate=self.AR.sample_rate[0],
                         comments=recording_mode,
-                        control=None,
-                        control_description=None,
                         sweep_number=np.uint32(sweepno),
-                        offset=datainfo[1]["ClampState"]["holding"],
                     )
 
-                    IR_sweep_index = self.NWBFile.add_intracellular_recording(
-                        electrode=elec1,
-                        stimulus=vstim,
-                        response=idata,
-                        id=sweepno + self.sweep_counter,
-                    )
-                    odata, osite = self.capture_optical_stimulation(
-                        path_to_cell=path_to_cell,
-                        protocol=protocol,
-                        recording_mode=recording_mode,
-                        sweepno=sweepno,
-                        electrode=elec1,
-                    )
-                    if odata is not None:
-                        self.NWBFile.add_intracellular_recording(
-                            electrode=elec1,
-                            response=idata,
-                            stimulus=odata,
-                            id=sweepno + self.sweep_counter + 10000,
-                        )
-                        self.NWBFile.add_ogen_site(osite)
-                        ogenseries = NWB.ogen.OptogeneticSeries(
-                            name=f"{opto_name:s}_{sweepno:d}",
-                            description="Optogenetic stimulation",
-                            data=[70.0],
-                            site=osite,
-                            rate=1.0,
-                        )
-                        self.NWBFile.add_stimulus(ogenseries)
+            IR_index = self.NWBFile.add_intracellular_recording(
+                electrode=elec1,
+                stimulus=stimulus,
+                response=response,
+                id=sweepno + self.sweep_counter,
+            )
+            # one electrode: each sweep is its own "simultaneous" recording
+            recordings.append(self.NWBFile.add_icephys_simultaneous_recording(recordings=[IR_index]))
+            self.add_optical_stimulation(
+                optical=optical,
+                protocol=protocol,
+                sweepno=sweepno,
+                dir_index=sweep_dir_index[sweepno],
+                starting_time=starting_time,
+            )
 
-                case "I=0":
-                    print(f"Recording mode {recording_mode:s} not implemented")
-                    return None
-            recordings.append(IR_sweep_index)
+        self.sweep_counter += nsweeps
 
-        self.sweep_counter += sweepno + 1
-        IR_simultaneous_index = self.NWBFile.add_icephys_simultaneous_recording(
-            recordings=recordings,
-        )
-
-        # make the sequential group (we only have one "simultaneous" recording)
+        # the sweeps of this protocol form one sequential recording
         IR_sequence_index = self.NWBFile.add_icephys_sequential_recording(
-            simultaneous_recordings=[IR_simultaneous_index],
-            stimulus_type="square",
+            simultaneous_recordings=recordings,
+            stimulus_type=stimulus_type,
         )
-        IR_run_index = self.NWBFile.add_icephys_repetition(
-            sequential_recordings=[IR_sequence_index]
-        )
-        self.NWBFile.add_icephys_experimental_condition(repetitions=[IR_run_index])
+        # group with repeats of this protocol (name without the "_000" repeat number)
+        protocol_base = re.sub(r"_\d{3}$", "", protocol)
+        self.protocol_sequences.setdefault(protocol_base, []).append(IR_sequence_index)
 
-    def get_CC_data(
-        self, path_to_cell: Path, protocol: str, info: dict, device: NWB.device, protonum: int = 0
-    ):
-        """Check if a protocol is a one of our known
-        current-clamp protocols, and if so, put the data into the
-        NWB format
-
-        This adds the cc protocol information directly to the self.NWBFile object.
-
-        Args:
-            path_to_cell: Path, : full path to the protocol
-            info: dict, : acq4 metadata dictionary
-            device: NWB.device
-        Returns:
-            Nothing
-        """
-        protoname = protocol
-        series_description_description = None
-        if protoname.startswith("CCIV"):
-            series_description_description = "Current Clamp IV series"
-        elif protoname.startswith("Ic_LED"):
-            series_description_description = (
-                "Current Clamp with LED Illumination for optical stimulation"
-            )
-        elif protoname.startswith("Map_NewBlueLaser_IC"):
-            series_description_description = "Current Clamp with Laser scanning photostimulation"
-        if series_description_description is None:
-            return None
-        for ampchannel in self.ampchannels:
-            self.get_one_recording(
-                recording_mode="CC",
-                path_to_cell=path_to_cell,
-                series_description=series_description_description,
-                protocol=protocol,
-                info=info,
-                device=device,
-                acq4_source_name=f"MultiClamp{ampchannel:d}.ma",
-                electrode=ampchannel,
-                protonum=protonum,
-            )
-
-    def get_VC_data(
-        self, path_to_cell: Path, protocol: str, info: dict, device: NWB.device, protonum: int
-    ):
-        """Check if a protocol is a one of our known
-        voltage-clamp protocols, and if so, put the data into the
-        NWB format
-
-        This adds the vc protocol information directly to the self.NWBFile object.
-
-         Args:
-            path_to_cell: Path, : full path to the protocol
-            info: dict, : acq4 metadata dictionary
-            device: NWB.device
-        Returns:
-            Nothing
-        """
-
-        vcseries_description = None
-        if protocol.startswith("VCIV"):
-            vcseries_description = "Voltage Clamp series"
-        elif protocol.startswith(("Vc_LED", "VC_LED")):
-            vcseries_description = "Voltage Clamp with LED Illumination for optical stimulation"
-        elif protocol.startswith("Map_NewBlueLaser_VC"):
-            vcseries_description = "Voltage Clamp with Laser scanning photostimulation"
-        if vcseries_description is None:
-            return None
-
-        for ampchannel in self.ampchannels:
-            self.get_one_recording(
-                recording_mode="VC",
-                series_description=vcseries_description,
-                path_to_cell=path_to_cell,
-                protocol=protocol,
-                info=info,
-                device=device,
-                acq4_source_name=f"MultiClamp{ampchannel:d}.ma",
-                electrode=ampchannel,
-                protonum=protonum,
-            )
-
-    def capture_optical_stimulation(
+    def get_protocol_data(
         self,
         path_to_cell: Path,
         protocol: str,
-        recording_mode: str = "VC",
-        sweepno: int = 0,
-        electrode: str = "None",
+        proto_index: dict,
+        info: dict,
+        device: NWB.device,
+        protonum: int = 0,
     ):
-        # capture optical stimulation information as well
+        """Check if a protocol is one of our known protocols (see known_protocols),
+        and if so, put the data into the NWB format.
+        The recording mode is read from the amplifier settings in the acq4 protocol index,
+        and must match the mode expected for the protocol.
 
-        # The optical stimulation data is held as a VC stimulus series
-        # This should be changed in the future
-        # The "control" element holds a 2-d array of sites for laser scanning
-        # (sorry, the whole array is repeated in every trial).
-        # nwb wants the control data to be in integer format, so we scale to microns
+        This adds the protocol information directly to the self.NWBFile object.
 
-        odata = None
-        osite = None
+        Args:
+            path_to_cell: Path, : full path to the cell
+            protocol: str : protocol name
+            proto_index: dict : acq4 index for the protocol directory
+            info: dict, : acq4 metadata dictionary
+            device: NWB.device
+        Returns:
+            Nothing
+        """
+        ptype = protocol_type(protocol)
+        if ptype is None:
+            print(f"    Protocol {protocol:s} is not a known protocol type; skipping")
+            return None
+        expected_mode, series_description, stimulus_type = ptype
+        devices = proto_index.get("devices", {})
+        for ampchannel in self.ampchannels:
+            amp_name = f"{self.amplifier_prefix:s}{ampchannel:d}"
+            if amp_name not in devices:
+                print(f"    Amplifier {amp_name:s} was not used in protocol {protocol:s}; skipping")
+                continue
+            acq4_mode = devices[amp_name]["mode"]
+            match acq4_mode:
+                case "IC" | "I=0" | "CC":
+                    recording_mode = "CC"
+                case "VC":
+                    recording_mode = "VC"
+                case _:
+                    print(f"    Recording mode {acq4_mode!s} is not implemented; skipping {protocol:s}")
+                    continue
+            if recording_mode != expected_mode:
+                print(
+                    f"    Protocol {protocol:s} was recorded in {acq4_mode:s} mode, "
+                    f"but a {expected_mode:s} protocol was expected; skipping"
+                )
+                continue
+            self.get_one_recording(
+                recording_mode=recording_mode,
+                path_to_cell=path_to_cell,
+                series_description=series_description,
+                protocol=protocol,
+                info=info,
+                device=device,
+                acq4_source_name=f"{amp_name:s}.ma",
+                electrode=ampchannel,
+                protonum=protonum,
+                stimulus_type=stimulus_type,
+            )
+
+    def read_optical_stimulation(self, protocol: str):
+        """Read the laser and LED command waveforms for the current protocol.
+        This is done once per protocol; add_optical_stimulation then stores each sweep.
+
+        Optical stimulation is stored in NWB ogen structures:
+            OptogeneticStimulusSite: the light source and where it was aimed. For laser
+                scanning there is one site per sweep (the spot position); for the
+                widefield LED there is one site per protocol.
+            OptogeneticSeries: the light source command waveform for each sweep. The data
+                are the command values as recorded by acq4 (volts); "conversion" scales
+                the largest command in the protocol to the nominal source power in watts.
+                The power is not calibrated, and assumes a linear relation between command
+                and power.
+
+        Returns:
+            dict: one entry per light source used in this protocol ("laser", "LED"),
+            holding the per-sweep waveforms and the scaling information.
+        """
+        optical = {}
         #  laser scanning:
         if self.AR.getLaserBlueCommand():
+            if not self.AR.getScannerPositions():
+                raise ValueError(
+                    f"Scanner positions for {protocol:s} could not be read; "
+                    f"please check the acq4 data in {self.AR.protocol!s}"
+                )
             if self.laser_device is None:
                 self.laser_device = self.NWBFile.create_device(
                     name="Oxxius Laser", description="450 nm 70 mW single-photon Laser"
                 )
-            scinfo = self.AR.getScannerPositions()
-            sites = [self.AR.scanner_info[spot]["pos"] for spot in self.AR.scanner_info.keys()]
-            for i, site in enumerate(sites):
-                sites[i] = (
-                    np.int32(sites[i][0] * 1e6),
-                    np.int32(sites[i][1] * 1e6),
-                )
-                # sites = map(sites, lambda x: (np.int32(x[0]*1e6), np.int32(x[1]*1e6)))
-            # sites = str(sites)  # must convert to string to pass nwb tests.
-            location_column = VectorData(
-                name="sites",
-                data=sites,
-                description="x, y positions in microns for laser scanning photostimulation",
-            )
-            control_description = "Laser scanning (spot) photostimulation positions (in microns)"
-            light_source = "450 nm 70 mW Laser"
-
-            if recording_mode == "VC":
-                odata = NWB.icephys.VoltageClampStimulusSeries(
-                    name=f"{protocol:s}:opto_{sweepno:d}",
-                    description=f"Optical stimulation control waveform and xy positions for {light_source:s}",
-                    data=self.AR.LaserBlue_pCell,
-                    rate=self.AR.LaserBlue_sample_rate[0],
-                    electrode=electrode,
-                    gain=1.0,
-                    stimulus_description=str(path_to_cell.name),
-                    conversion=1.0,
-                    # control=sites,
-                    control_description=control_description,
-                    comments=f"{self.AR.scanner_spotsize:e}",
-                    unit="volts",
-                )
-
-            if recording_mode == "CC":
-                odata = NWB.icephys.CurrentClampStimulusSeries(
-                    name=f"{protocol:s}:opto_{sweepno:d}",
-                    description=f"Optical stimulation control waveform and xy positions for {light_source:s}",
-                    data=self.AR.LaserBlue_pCell,
-                    rate=self.AR.LaserBlue_sample_rate[0],
-                    electrode=electrode,
-                    gain=1.0,
-                    stimulus_description=str(path_to_cell.name),
-                    conversion=1.0,
-                    # control=sites,
-                    control_description=control_description,
-                    comments=f"{self.AR.scanner_spotsize:e}",
-                    unit="amperes",
-                )
-            osite = NWB.ogen.OptogeneticStimulusSite(
-                name=f"{protocol:s}:sweep={sweepno:d}",
-                device=self.laser_device,
-                description="Laser Scanning Photostimulation site",
-                excitation_lambda=450.0,
-                location=str(sites[sweepno]),
-            )
-        # widefiled LED:
+            # use the Pockels cell command if it was recorded, otherwise the shutter
+            waveforms = [
+                pcell if pcell is not None else shutter
+                for pcell, shutter in zip(self.AR.LaserBlue_pCell_sweeps, self.AR.LaserBlue_Raw_sweeps)
+            ]
+            optical["laser"] = {
+                "waveforms": waveforms,
+                "rates": self.AR.LaserBlue_sample_rate,
+                "power_W": self.laser_power_W,
+                "max_command": np.max([np.max(np.abs(w)) for w in waveforms]),
+                "spotsize": self.AR.scanner_spotsize,
+                "light_source": "450 nm 70 mW Laser",
+            }
+        # widefield LED:
         if self.AR.getLEDCommand():
             light_source = "470 nm Thorlabs LED"
+            if np.isnan(self.led_power_W):
+                CP("y", "'led_power_W' is not set for this dataset; LED power will be recorded as NaN")
             if self.LED_device is None:
                 self.LED_device = self.NWBFile.create_device(
                     name=f"{light_source:s}", description="Widefield LED"
                 )
-            sites = [[0, 0]] * np.array(self.AR.LED_Raw).shape[
-                0
-            ]  # also possible to get fov from acq4...
-            spotsize = 1e-4  # 100 microns.
-            control_description = "Widefield LED through objective"
-
-            if recording_mode == "VC":
-                odata = NWB.icephys.VoltageClampStimulusSeries(
-                    name=f"{protocol:s}:opto_{sweepno:d}",
-                    description=f"Optical stimulation waveform for {light_source:s}",
-                    data=np.array(self.AR.LED_Raw)[:, sweepno],  # assuming is constant...
-                    rate=self.AR.LED_sample_rate[0],
-                    electrode=electrode,
-                    gain=1.0,
-                    stimulus_description=str(path_to_cell.name),
-                    conversion=1.0,
-                    # control=sites,
-                    control_description=control_description,
-                    comments=f"Spotsize: {spotsize:e}",
-                    unit="volts",
-                )
-            if recording_mode == "CC":
-                odata = NWB.icephys.CurrentClampStimulusSeries(
-                    name=f"{protocol:s}:opto_{sweepno:d}",
-                    description=f"Optical stimulation waveform",
-                    data=np.array(self.AR.LED_Raw)[:, sweepno],  # assuming is constant...
-                    rate=self.AR.LED_sample_rate[0],
-                    electrode=electrode,
-                    gain=1.0,
-                    stimulus_description=str(path_to_cell.name),
-                    conversion=1.0,
-                    # control=sites,
-                    control_description=control_description,
-                    comments=f"Spotsize: {spotsize:e}",
-                    unit="amperes",
-                )
-
-            osite = NWB.ogen.OptogeneticStimulusSite(
-                name=f"{protocol:s}:optosite_{sweepno:d}",
+            waveforms = [np.array(w) for w in self.AR.LED_Raw]
+            led_site = NWB.ogen.OptogeneticStimulusSite(
+                name=f"{protocol:s}~optosite",
                 device=self.LED_device,
-                description="Widefield optical stimulation",
+                description="Widefield optical stimulation through the objective",
                 excitation_lambda=470.0,
-                location=str(sites[sweepno]),
+                location="x=0 um, y=0 um (widefield, centered on the field of view)",
             )
-        return odata, osite
+            self.NWBFile.add_ogen_site(led_site)
+            optical["LED"] = {
+                "waveforms": waveforms,
+                # the sample rate from the LED file index is not reliable; use the time base
+                "rates": [1.0 / np.mean(np.diff(tb)) for tb in self.AR.LED_time_base],
+                "power_W": self.led_power_W,
+                "max_command": np.max([np.max(np.abs(w)) for w in waveforms]),
+                "spotsize": 1e-4,  # 100 microns.
+                "light_source": light_source,
+                "site": led_site,
+            }
+        return optical
+
+    def add_optical_stimulation(
+        self,
+        optical: dict,
+        protocol: str,
+        sweepno: int,
+        dir_index: int,
+        starting_time: float,
+    ):
+        """Add the optical stimulation for one sweep to the NWB file
+
+        Args:
+            optical (dict): light source information from read_optical_stimulation
+            protocol (str): protocol name
+            sweepno (int): sweep number (row in the data array)
+            dir_index (int): index of the acq4 sweep directory for this sweep
+            starting_time (float): start of the sweep relative to the session start
+        """
+        for source, light in optical.items():
+            if source == "laser":
+                if dir_index >= self.AR.scanner_positions.shape[0]:
+                    raise ValueError(
+                        f"Scanner position for sweep {sweepno:d} of {protocol:s} could not be read; "
+                        f"please check the acq4 data in {self.AR.protocol!s}"
+                    )
+                # scanner positions are in meters; store them in microns
+                x, y = (int(np.round(p * 1e6)) for p in self.AR.scanner_positions[dir_index])
+                site = NWB.ogen.OptogeneticStimulusSite(
+                    name=f"{protocol:s}~optosite_{sweepno:d}",
+                    device=self.laser_device,
+                    description="Laser Scanning Photostimulation site",
+                    excitation_lambda=450.0,
+                    location=f"x={x:d} um, y={y:d} um (scanner coordinates)",
+                )
+                self.NWBFile.add_ogen_site(site)
+                series_name = f"{protocol:s}~OptoSeries_{sweepno:d}"
+            else:
+                site = light["site"]
+                # keep the laser series name unique if both light sources were used
+                series_name = f"{protocol:s}~OptoSeries{'LED' if 'laser' in optical else '':s}_{sweepno:d}"
+            if light["max_command"] > 0:
+                conversion = light["power_W"] / light["max_command"]
+            else:
+                conversion = np.nan
+            ogenseries = NWB.ogen.OptogeneticSeries(
+                name=series_name,
+                description=(
+                    f"Optical stimulation command waveform for {light['light_source']:s} (volts as recorded); "
+                    f"conversion scales the largest command in the protocol to the nominal power of "
+                    f"{light['power_W']:.4g} W (not calibrated)"
+                ),
+                data=light["waveforms"][dir_index],
+                site=site,
+                conversion=conversion,
+                starting_time=starting_time,
+                rate=float(light["rates"][dir_index]),
+                comments=f"Spotsize: {light['spotsize']:e}",
+            )
+            self.NWBFile.add_stimulus(ogenseries)
 
 
 # Read the data back in
@@ -1270,10 +1215,11 @@ def ConvertFile(
     output_path: Union[str, Path] = None,
     dataset: dict = None,
     overwrite: bool = False,
+    testmode: bool = False,
 ):
     # experiment_name = None
     assert output_path is not None
-    A2N = ACQ4toNWB(output_path=output_path, overwrite=overwrite)
+    A2N = ACQ4toNWB(output_path=output_path, overwrite=overwrite, testmode=testmode)
     A2N.set_amplifier_name(dataset['device'])
     NWBFile = A2N.acq4tonwb(
         experiment_name=experiment_name,
@@ -1281,7 +1227,6 @@ def ConvertFile(
         output_path=output_path,
         protocols=protocols,
         appendmode=appendmode,
-        recordingmode=dataset['mode'],
         dataset=dataset,
     )
     print("NWB file written:  ", NWBFile)
@@ -1289,16 +1234,11 @@ def ConvertFile(
 
 
 def select(protocols: list):
-    ok_prots = []
-    for protocol in protocols:
-        if (
-            protocol.startswith("CCIV")
-            or protocol.startswith("Map")
-            or protocol.startswith("Vc_LED")
-            or protocol.startswith("Ic_LED")
-            or protocol.startswith("VC_LED")
-        ):
-            ok_prots.append(protocol)
+    """Keep the protocols that can be converted (see known_protocols)"""
+    ok_prots = [p for p in protocols if protocol_type(p) is not None]
+    skipped = [p for p in protocols if protocol_type(p) is None]
+    if len(skipped) > 0:
+        print(f"    Protocols not converted (not a known protocol type): {skipped!s}")
     return ok_prots
 
 
@@ -1308,9 +1248,10 @@ def cvt(
     output_path: Union[str, Path] = None,
     dataset: dict = None,
     exclusions: dict = None,
-    rigs: Union[Tuple, List] = None,
+    rigs: Union[Tuple, List, None] = None,
     row_num: int = 0,
     overwrite: bool = False,
+    testmode: bool = False,
 ):
     """Do the file conversion for each complete data set in a given database row
 
@@ -1320,13 +1261,10 @@ def cvt(
 
     path = row.data_directory
     day = row.date
-    if rigs is not None:  # restrict by rig
-        rig_ok = False
-        for rig in rigs:
-            if day.startswith(rig):  # only do data from a given rig.
-                rig_ok = True
-        if not rig_ok:
-            print(f"Rig ok NOT: {rig:s} in {rigs!s}")
+    if rigs is not None:  # restrict by rig: the rig is a directory in the data path
+        pathparts = Path(path, day).parts
+        if not any(rig in pathparts for rig in rigs):
+            print(f"Skipping {day!s}: not recorded on one of the rigs {rigs!s}")
             return None, None  # did not match rigs
     slice = row.slice_slice
     cell = row.cell_cell
@@ -1338,16 +1276,18 @@ def cvt(
         return None, None
     dsc = f"{day}/{slice}/{cell}"
     ds = f"{day}/{slice}"
-    if dsc in exclusions.keys() or ds in exclusions.keys():
-        if protocols in ['all', 'All']:
-            CP("m", f"{dsc} Excluded all protocols")
+    for exclusion_key in [ds, dsc]:  # slice-level and cell-level exclusions
+        if exclusion_key not in exclusions.keys():
+            continue
+        excluded_protocols = exclusions[exclusion_key]["protocols"]
+        if any(p in ["all", "All"] for p in excluded_protocols):
+            CP("m", f"{dsc} Excluded all protocols ({exclusion_key:s})")
             return None, None
-        else:
-            CP("m", f"{dsc} Excluded protocols: {exclusions[dsc]!s}")
-            protocols = [p for p in protocols if p not in exclusions[dsc]['protocols']]
-            if len(protocols) == 0:
-                CP("m", f"{dsc} No protocols left after exclusion")
-                return None, None
+        CP("m", f"{dsc} Excluded protocols: {excluded_protocols!s}")
+        protocols = [p for p in protocols if p not in excluded_protocols]
+        if len(protocols) == 0:
+            CP("m", f"{dsc} No protocols left after exclusion")
+            return None, None
 
     print("\nCell id: ", row.cell_id, " index: ", row_num)
     print("     Protocols: ", protocols)
@@ -1359,185 +1299,146 @@ def cvt(
         output_path=output_path,
         protocols=protocols,
         overwrite=overwrite,
+        testmode=testmode,
     )
     # NWBFiles.append(NWBFile)
     return NWBFile, filename
 
 
-def HK_output(
-    output_path: Union[str, Path], experiment_name: str, dataset: dict, exclusions: dict, overwrite: bool = False
+def convert_dataset(
+    output_path: Union[str, Path],
+    experiment_name: str,
+    dataset: dict,
+    experiment_config: dict,
+    exclusions: dict,
+    overwrite: bool = False,
+    testmode: bool = False,
+    rigs: Union[Tuple, List, None] = None,
 ):
-    """Read the pandas database for this set of experiments.
-    The pandas database is generated by dataSummary.py (from github.com/pbmanis/ephys/util).
+    """Read the pandas database for this set of experiments, and convert each cell.
+    The pandas database is generated by dataSummary.py (from github.com/pbmanis/ephys/util),
+    and its location is given in the ephys experiment configuration file
+    (databasepath/directory/datasummaryFilename).
     This database is a complete record of the experiments, not filtered by any criteria.
-    Each row of the database corresponds to one day's recordings - usually one subject
+    Each row of the database corresponds to one cell.
     The column "data_complete" holds the list of protocols that were completed and are
     potentially suitable for further analysis.
     """
     import pandas as pd
 
-    HK_db = pd.read_pickle(
-        # "/Users/pbmanis/Desktop/Python/HK_Collab/datasets/HK_fastcortex_cortex.pkl"
-        "/Users/pbmanis/Desktop/Python/HK_Collab/datasets/DCN_IC_inj/DCN_IC_inj.pkl"
-        # "/Users/pbmanis/Desktop/Python/HK_Collab/datasets/Thalamocortical/HK_TC_datasummary-2024.02.10.pkl"
-        # "/Users/pbmanis/Desktop/Python/HK_Collab/datasets/HK_CRH-Cre/HK_CRH-Cre_datasummary-2025.04.21.pkl"
+    database = Path(
+        experiment_config["databasepath"],
+        experiment_config["directory"],
+        experiment_config["datasummaryFilename"],
     )
-    print("Converting acq4 to NWB from database: \n", HK_db.cell_id)
+    print(f"Converting acq4 to NWB from database: {database!s}")
+    db = pd.read_pickle(database)
 
     NWBFiles = []
     files = []
-    #             results: dict = {}
-    #             tasks = dict(zip(range(len(validivs)), validivs))
-    #             result = [None] * len(tasks)
-    # nworkers = 12
-    # with concurrent.futures.ProcessPoolExecutor(max_workers=nworkers) as executor:
-    #     print("   Submitting execution to concurrent futures")
-    #     futures = [
-    #         executor.submit(
-    #             concurrent_iv_analysis,
-    #             self,
-    #             icell,
-    #             i,  # index into the task/validivs list
-    #             x,  # the actual valid iv (protocol) run
-    #             cell_directory,
-    #             validivs,   # I expect that this doesn't need to be passed...
-    #             additional_iv_records,
-    #             nfiles,
-    #         )
-    #         for i, x in enumerate(tasks)
-    #     ]
-    #     for i, future in enumerate(concurrent.futures.as_completed(futures)):
-    #         result, nfiles = future.result()
-    #         # print(result.keys())
-    #         # print(result['protocol'])
-    #         results[result['protocol']] = result
-    #     if len(results) == 0 or self.dry_run:
-    #         return
-
-    for index in HK_db.index:
-        # if index < 88:  # just for a test...
-        #     continue
-        print(HK_db.iloc[index].cell_id)
+    for row_num, (index, row) in enumerate(db.iterrows()):
+        print(row.cell_id)
         nwbfile, filename = cvt(
-            HK_db.iloc[index],
+            row,
             experiment_name,
             output_path=output_path,
             dataset=dataset,
             exclusions=exclusions,
-            rigs=None,  #
-            #     ["Rig2", "Rig4"],
-            row_num=index,
+            rigs=rigs,
+            row_num=row_num,
             overwrite=overwrite,
+            testmode=testmode,
         )
         if nwbfile is None:
             continue
         NWBFiles.append(nwbfile)
         files.append(filename)
         print("ACQ4 source file: ", filename)
-        # print("NWB file: ", nwbfile)
-        # validate(nwbfile, nwbfile)
-
-
-def RJE_output(output_path: Union[str, Path], experiment_name: str, overwrite: bool = False):
-    """Read the pandas database for this set of experiments.
-    The pandas database is generated by dataSummary.py (from github.com/pbmanis/ephys/util).
-    This database is taken from the selected cells that met criteria for analysis.
-    Each row of the database corresponds to one day's recordings - usually one subject
-    The column "data_complete" holds the list of protocols that were completed and are
-    potentially suitable for further analysis.
-    """
-    import pandas as pd
-
-    RJE_db = pd.read_pickle(
-        # "/Users/pbmanis/Desktop/Python/HK_Collab/datasets/HK_fastcortex_cortex.pkl"
-        "/Users/pbmanis/Desktop/Python/HK_Collab/datasets/DCN_IC_inj/DCN_IC_inj.pkl"
-        # "/Users/pbmanis/Desktop/Python/HK_Collab/datasets/Thalamocortical/HK_TC_datasummary-2024.02.10.pkl"
-        # "/Users/pbmanis/Desktop/Python/HK_Collab/datasets/HK_CRH-Cre/HK_CRH-Cre_datasummary-2025.04.21.pkl"
-    )
-    print("Converting acq4 to NWB from database: \n", RJE_db.cell_id)
-
-    NWBFiles = []
-    files = []
-    #             results: dict = {}
-    #             tasks = dict(zip(range(len(validivs)), validivs))
-    #             result = [None] * len(tasks)
-    # nworkers = 12
-    # with concurrent.futures.ProcessPoolExecutor(max_workers=nworkers) as executor:
-    #     print("   Submitting execution to concurrent futures")
-    #     futures = [
-    #         executor.submit(
-    #             concurrent_iv_analysis,
-    #             self,
-    #             icell,
-    #             i,  # index into the task/validivs list
-    #             x,  # the actual valid iv (protocol) run
-    #             cell_directory,
-    #             validivs,   # I expect that this doesn't need to be passed...
-    #             additional_iv_records,
-    #             nfiles,
-    #         )
-    #         for i, x in enumerate(tasks)
-    #     ]
-    #     for i, future in enumerate(concurrent.futures.as_completed(futures)):
-    #         result, nfiles = future.result()
-    #         # print(result.keys())
-    #         # print(result['protocol'])
-    #         results[result['protocol']] = result
-    #     if len(results) == 0 or self.dry_run:
-    #         return
-
-    for index in RJE_db.index:
-        # if index < 88:  # just for a test...
-        #     continue
-        print(RJE_db.iloc[index].cell_id)
-        nwbfile, filename = cvt(
-            RJE_db.iloc[index],
-            experiment_name,
-            output_path=output_path,
-            rigs=None,  #
-            #     ["Rig2", "Rig4"],
-            row_num=index,
-            overwrite=overwrite,
-        )
-        if nwbfile is None:
-            continue
-        NWBFiles.append(nwbfile)
-        files.append(filename)
-        print("NWB file: ", filename)
-        # print("NWB file: ", nwbfile)
-        # validate(nwbfile, nwbfile)
+    return NWBFiles
 
 
 def check_conversion(nwbf):
+    """Inspect one NWB file with nwbinspector, using the DANDI configuration
+    (as for "nwbinspector <file> --config dandi").
+    The file is reported as OK if there are only best practice suggestions.
+
+    Returns:
+        bool: True if the file is OK
+    """
     try:
-        results = list(inspect_nwbfile(nwbfile_path=nwbf))
-        if len(results) == 0:
-            print("    Conversion OK for file: ", nwbf)
-        else:
-            print(f"    Error in conversion detected: for file: {nwbf!s} ")
-            print(results)
-            # exit()
-    except:
-        print(f"    Error in conversion detected: for file  {nwbf!s} ")
-        print(results)
-        exit()
+        results = list(inspect_nwbfile(nwbfile_path=nwbf, config=load_config("dandi")))
+    except Exception as e:
+        print(f"    nwbinspector failed for file {nwbf!s}: {e!r}")
+        return False
+    problems = [r for r in results if r.importance != Importance.BEST_PRACTICE_SUGGESTION]
+    counts = collections.Counter(r.importance.name for r in results)
+    if len(problems) == 0:
+        print(f"    Conversion OK for file: {nwbf!s} {dict(counts) if len(counts) > 0 else ''}")
+        return True
+    print(f"    Problems in conversion for file: {nwbf!s} {dict(counts)!s}")
+    for r in problems:
+        print(f"        {r.importance.name:s} {r.check_function_name:s} {r.object_name!s}: {r.message:s}")
+    return False
 
 
-def check_conversions(output_path: Union[str, Path], dataset: str = "HK_CRH-Cre"):
+def check_conversions(output_path: Union[str, Path]):
+    """Run nwbinspector on every NWB file in the output directory for a dataset"""
+    output_path = Path(output_path)
     print("=" * 80)
-    print(f"Checking conversion for dataset: {dataset:s}")
-    print(f"   at output path: {output_path!s}")
-    NWBFiles = []
-    print(output_path.parent.name)
-    for f in Path(output_path).rglob("*.nwb"):
-        if f.name.startswith(dataset) or f.name.startswith(str(output_path.parent.name)):
-            NWBFiles.append(f)
-    print("NWBFiles: ", NWBFiles)
+    print(f"Checking conversions in: {output_path!s}")
+    NWBFiles = sorted(output_path.rglob("*.nwb"))
+    if len(NWBFiles) == 0:
+        print(f"    No NWB files found in {output_path!s}")
+        return
+    print(f"    {len(NWBFiles):d} NWB files found")
+    nok = sum(check_conversion(nwbf) for nwbf in NWBFiles)
+    print(f"    {nok:d} of {len(NWBFiles):d} files OK")
 
-    for i, nwbf in enumerate(NWBFiles):
-        if nwbf is None:
-            continue
-        check_conversion(nwbf)
+
+def upload_to_dandi(output_path: Path, dandi_path: Path, dataset_id: str):
+    """Prepare the converted files for upload to the DANDI archive.
+    Downloads the dandiset metadata (dandiset.yaml) into dandi_path/dataset_id,
+    organizes the converted NWB files into it (dry run first), and validates.
+    Each step must succeed before the next is run.
+    The final "dandi upload" is left to be run by hand (see README.md).
+
+    Args:
+        output_path (Path): directory holding the converted NWB files
+        dandi_path (Path): directory in which the dandiset directory is created
+        dataset_id (str): the DANDI dataset id (e.g. "001423")
+
+    Returns:
+        bool: True if all steps succeeded
+    """
+    import subprocess
+
+    dandi_path.mkdir(parents=True, exist_ok=True)
+    dandiset_dir = Path(dandi_path, dataset_id)
+    steps = [
+        (
+            [
+                "dandi",
+                "download",
+                "--download",
+                "dandiset.yaml",
+                "--existing",
+                "refresh",
+                f"https://dandiarchive.org/dandiset/{dataset_id:s}/draft",
+            ],
+            dandi_path,
+        ),
+        (["dandi", "organize", str(output_path), "-f", "dry"], dandiset_dir),  # dry run to see if it works
+        (["dandi", "organize", str(output_path)], dandiset_dir),
+        (["dandi", "validate", "."], dandiset_dir),
+    ]
+    for cmd, cwd in steps:
+        print(f"Running: {' '.join(cmd):s}\n    in {cwd!s}")
+        result = subprocess.run(cmd, cwd=cwd)
+        if result.returncode != 0:
+            print(f"'{' '.join(cmd):s}' failed (exit code {result.returncode:d}); stopping")
+            return False
+    print(f"Ready to upload. To upload, run:\n    cd {dandiset_dir!s}\n    dandi upload")
+    return True
 
 
 def main():
@@ -1548,9 +1449,15 @@ def main():
     )
     parser.add_argument(
         type=str,
-        default="HK_CN_IC",
         dest="dataset",
-        help=f"Dataset name (e.g. {list(config.keys())!s})",
+        help="Dataset name: a top-level entry in the configuration file",
+    )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=str(default_config_file),
+        dest="config_file",
+        help="Dataset configuration file",
     )
     parser.add_argument(
         "-c",
@@ -1586,85 +1493,63 @@ def main():
         "--upload",
         default=False,
         action="store_true",
-        help="Upload to the Dandi archive",
+        help="Prepare the files for upload to the Dandi archive (download, organize, validate)",
     )
     parser.add_argument(
         "-t",
         "--testmode",
         default=False,
         action="store_true",
-        help="Run in test mode (only test conversion for a few files, and don't upload to dandi)",
+        help="Run in test mode (read the metadata but do not write nwb files, and do not run the dandi steps)",
     )
     args = parser.parse_args()
-    # print("Arguments: ", args)
+    config = read_config(args.config_file)
     id = args.dataset
     if id not in config.keys():
-        print(f"Dataset {id} not found")
-        print(f"Available datasets: {config.keys()}")
-        exit()
+        print(f"Dataset {id} not found in {args.config_file!s}")
+        print(f"Available datasets: {[k for k in config.keys() if k != 'datasets']!s}")
+        exit(1)
     else:
         print(f"Dataset {id} found: {config[id]!s}")
-    experiment_config = pyqtgraph.configfile.readConfigFile(config[id]["configfile"])['experiments'][id]
-    exclusions = experiment_config['excludeIVs']
-    output_path =       Path("/Users/pbmanis/Desktop/Python/Dandi_acq4", config[id]['output_dir'], config[id]["dataset_id"])
-    dandi_output_path = Path("/Users/pbmanis/Desktop/Python/Dandi_acq4", config[id]['dandi_output_dir'], config[id]["dataset_id"])
+    dataset_id = config[id].get("dataset_id", None)
+    if dataset_id is None:
+        print(f"Dataset {id} has no dataset_id in {args.config_file!s}")
+        exit(1)
+    dataset_id = str(dataset_id)
+    experiments = pyqtgraph.configfile.readConfigFile(config[id]["configfile"])["experiments"]
+    # the experiment name in the ephys experiments file, if it differs from the dataset name
+    experiment_id = config[id].get("experiment", id)
+    if experiment_id not in experiments:
+        print(f"Experiment {experiment_id} is not in the experiments file {config[id]['configfile']!s}")
+        print(f"Experiments in that file: {list(experiments.keys())!s}")
+        print("Set 'experiment' in the dataset configuration to one of these.")
+        exit(1)
+    experiment_config = experiments[experiment_id]
+    exclusions = experiment_config.get("excludeIVs", None) or {}
+    # relative output directories are relative to the project directory
+    output_path = Path(project_root, config[id]["output_dir"], dataset_id)
+    dandi_path = Path(project_root, config[id]["dandi_output_dir"])
     print(f"Output path: {output_path!s}")
     if args.convert:
-        if id in ["HK_CRH-Cre", "HK_TC", "DCN_IC_inj"]:
-            HK_output(
-                output_path=output_path,
-                dataset=config[id],
-                experiment_name=id,
-                overwrite=args.overwrite,
-                exclusions=exclusions,
-            )
-        elif id in ["DCN_IC_inj"]:
-            RJE_output(
-                output_path=output_path,
-                dataset=config[id],
-                experiment_name=id,
-                overwrite=args.overwrite,
-                exclusions=exclusions,
-            )   
+        convert_dataset(
+            output_path=output_path,
+            experiment_name=id,
+            dataset=config[id],
+            experiment_config=experiment_config,
+            exclusions=exclusions,
+            overwrite=args.overwrite,
+            testmode=args.testmode,
+        )
     if args.verify:
-        check_conversions(output_path=output_path, dataset=config[id]["dataset_id"])
+        check_conversions(output_path=output_path)
     if args.spotcheck is not None:
         check_conversion(Path(output_path, args.spotcheck))  # check the conversion
     if args.upload:
-        # upload to dandi
-        import subprocess
+        if args.testmode:
+            print("Testmode is True: not running the dandi download/organize/validate steps")
+        else:
+            upload_to_dandi(output_path=output_path, dandi_path=dandi_path, dataset_id=dataset_id)
 
-        local_path = f"{str(Path(dandi_output_path.parent, id)):s}"
-        print("archive path on local disk: ", local_path)
-        print("Dandi output path: ", output_path)
-        # exit()
-        subprocess.call(["dandi", "download", f"https://dandiarchive.org/dandiset/{id:s}/draft"])
-        cmd = ["dandi", "organize", f"{output_path!s}", "-f", "dry"]
-        subprocess.call(cmd, text=True, cwd=f"{id:s}")  # dry run to see if it works
-        subprocess.call(["dandi", "organize", f"{output_path!s}"], cwd=f"{id:s}")
-        subprocess.call(["dandi", "validate"], cwd=f"{id:s}")
-        # subprocess.call(["dandi", "upload"], cwd=f"{id:s}")
-
-
-def test_weight_conversion():
-    A2N = ACQ4toNWB()
-    test_cases = [
-        ('20.0', "20.0 g"),  # string, but no unit: should assume grams
-        ("20 g", "20.0 g"),  #string with unit, just reformat"
-        ("20g", "20.0 g"),  # string with unit, but no space: should still work
-        ("20 grams", "20.0 g"), # string with full unit name: make standard format
-        ("0.02 kg", "20.0 g"),  # string with different unit: should convert to grams
-        (20, "20.0 g"),  # int without unit: should assume grams
-        (20.0, "20.0 g"),  # float without unit: should assume grams
-        ("", "0.0 g"),  # empty string: should default to 0 grams
-        (None, "0.0 g"),  # None: should default to 0 grams
-    ]
-    for input_weight, expected_output in test_cases:
-        output = A2N.weight_with_units(input_weight)
-        print("testing weight conversion: ", input_weight, " -> ", output)
-        assert output == expected_output, f"Test failed for input: {input_weight!s}. Expected: {expected_output!s}, got: {output!s}"
-    print("All weight conversion tests passed!")
 
 if __name__ == "__main__":
-    # main()
-   print("testing weight:\n", test_weight_conversion())
+    main()

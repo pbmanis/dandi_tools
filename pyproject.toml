@@ -67,6 +67,7 @@ Homepage = "http://github.com/pbmanis/dandi"
 [project.scripts]
 acq4_to_nwb = "src.acq4_to_nwb:main"
 display_nwb = "src.display_nwb:main"
+browse_nwb = "src.browse_nwb:main"
 
 [dependency-groups]
 dev = [
