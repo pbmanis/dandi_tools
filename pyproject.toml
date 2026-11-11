@@ -68,6 +68,7 @@ Homepage = "http://github.com/pbmanis/dandi"
 acq4_to_nwb = "src.acq4_to_nwb:main"
 display_nwb = "src.display_nwb:main"
 browse_nwb = "src.browse_nwb:main"
+acq4_mosaic = "src.acq4_mosaic:main"
 
 [dependency-groups]
 dev = [
@@ -79,7 +80,7 @@ dev = [
     "mypy>=1.13",
     "nbconvert",
     "pandoc",
-    "pytest>=7.3.1",
+    "pytest>=9.0.3",
     "sphinx>=8.2.3",
     "vulture",
 ]
