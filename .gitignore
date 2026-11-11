@@ -165,3 +165,4 @@ venv.bak/
 .mypy_cache/
 
 001423/dandiset.yaml
+mosaic_test/

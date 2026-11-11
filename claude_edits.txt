@@ -1,0 +1,1243 @@
+Claude Code session: Dandi_acq4 cleanup and acq4_to_nwb.py review
+Date: 2026-11-10
+Repository: /Users/pbmanis/Desktop/Python/Dandi_acq4
+
+This file records the dialog of the session: each user message and Claude's reply in full.
+Between them, "[Actions]" notes summarize what Claude did with tools (file reads, edits,
+test runs); tool outputs are summarized, not copied.
+
+================================================================================
+USER (1)
+================================================================================
+Change this project to use uv and pyproject.toml; add a standard MIT license, change the
+env to .venv and ask me to delete the old environment.
+
+[Actions]
+- Read setup.py, requirements.txt, make_env.sh, pyproject.toml, .pdm-python, .python-version,
+  .gitignore, README.md, main.py; checked .venv (uv-created, Python 3.13.7) and dandi_venv.
+- Rewrote pyproject.toml: runtime dependencies; dev tools moved to [dependency-groups] dev;
+  valid classifiers; license-files; removed [tool.pdm], setuptools dynamic deps,
+  extra-build-dependencies, and the broken display_acq4 script entry.
+- Added LICENSE (MIT, Copyright (c) 2022-2026 Paul B. Manis).
+- git rm: setup.py, requirements.txt, make_env.sh, .pdm-python, main.py.
+- .gitignore: removed dandi_venv lines; .python-version now tracked.
+- README.md: installation section with uv sync / uv run; License section.
+- uv lock && uv sync; verified src.acq4_to_nwb imports and `uv run acq4_to_nwb --help`.
+
+--------------------------------------------------------------------------------
+CLAUDE
+--------------------------------------------------------------------------------
+The project now runs on uv with `pyproject.toml` as the only config file, and the
+environment is `.venv` (Python 3.13.7). `uv sync` builds it cleanly, `src.acq4_to_nwb`
+imports, and `uv run acq4_to_nwb --help` works. I staged the changes but haven't committed
+them.
+
+- pyproject.toml:
+  - Development tools (black, flake8, mypy, pytest, sphinx, jupyterlab and others) are now
+    in a separate `dev` group that `uv sync` installs by default. `uv sync --no-dev` installs
+    only what the code needs to run.
+  - I removed the leftover PDM and setuptools settings that pointed at `requirements.txt`,
+    and a numpy build setting the old `setup.py` needed.
+  - The classifiers were invalid, so I replaced them with standard ones and removed a
+    duplicate author entry.
+  - I removed the `display_acq4` command because it pointed to a function that doesn't exist.
+- LICENSE: standard MIT text, "Copyright (c) 2022-2026 Paul B. Manis".
+- Removed: `setup.py`, `requirements.txt`, `make_env.sh`, `.pdm-python`, and `main.py`
+  (a placeholder that only printed "Hello from dandi!").
+- README.md: the setup instructions now say to use `uv sync` / `uv run` instead of the ephys
+  environment, and there's a short License section.
+- .gitignore: removed the `dandi_venv` lines. `uv.lock` and `.python-version` are now
+  tracked, so the exact Python and package versions are fixed in the repo.
+
+`src/display_acq4.py` still needs the `ephys` package, which isn't installed (`ephys` is
+still commented out in `pyproject.toml`, as you had it). If you want that script to work in
+`.venv`, I can add `ephys` as an optional extra.
+
+Please delete the old environment. `dandi_venv/` is 1.3 GB and nothing uses it now. There
+are also three leftover `*.egg-info` folders from old builds (`dandi_acq4.egg-info` is
+rebuilt automatically when needed). From the project directory:
+
+    rm -rf dandi_venv dandi.egg-info dandi_tools.egg-info dandi_acq4.egg-info
+
+Tell me if you'd like me to run it for you, or to commit the changes.
+
+================================================================================
+USER (2)
+================================================================================
+Thanks, I ran the remove myself.
+Now check acq4_to_nwb.py for bugs and logical inconsistentices. Do not make any changes, just
+list a plan in steps.
+
+[Actions]
+- Read all of src/acq4_to_nwb.py; checked related parts of src/acq4_reader.py
+  (getLaserBlueCommand, getLEDCommand, getScannerPositions, getData), the config files,
+  numpy version (np.NaN gone in 2.4.4), and the real config keys. No changes made.
+
+--------------------------------------------------------------------------------
+CLAUDE
+--------------------------------------------------------------------------------
+I found about 30 problems in acq4_to_nwb.py. I made no changes. Three of them stop the
+conversion outright: no file is written unless you pass `-o`, every voltage-clamp protocol
+crashes, and running the file directly runs a broken test. Below, the problems are grouped by
+severity, and each heading is one step of the plan.
+
+## Step 1 — Fix the problems that crash or skip conversion
+
+1. No file is written unless `-o` is given (lines 580-589). `if not self.overwrite or
+   self.testmode: return outfilename` returns before converting whenever overwrite is off,
+   even when the output file doesn't exist yet. The message on 583-586 also prints under the
+   wrong condition and says "Testmode is true" when it isn't. `testmode` is never passed from
+   `main()` or `ConvertFile` either, so `-t` does nothing. The intended rule is probably: skip
+   if the file exists and overwrite is off; skip writing in testmode; otherwise convert.
+2. Every voltage-clamp protocol crashes (line 892). `resolution=np.NaN` raises
+   AttributeError: `NaN` was removed in NumPy 2, and the environment has 2.4.4. It should be
+   `np.nan`.
+3. Running the file directly runs a broken test (lines 1668-1670). The `__main__` block calls
+   `test_weight_conversion()` instead of `main()`. That test calls `A2N.weight_with_units`,
+   which isn't a method (it's a module-level function), so it crashes. The `uv run
+   acq4_to_nwb` command is unaffected because it calls `main()`. Move the test into
+   `tests.py` or pytest and restore `main()`.
+4. The LED stimulus uses the wrong array axis (lines 1131 and 1146). `LED_Raw` has shape
+   (sweeps, samples), so `[:, sweepno]` stores one sample from every sweep instead of the
+   waveform for this sweep. It should be `[sweepno, :]`.
+5. Laser site lookup can go out of range (lines 1059-1113). The result of
+   `getScannerPositions()` (`scinfo`) is ignored. `sites` comes from `scanner_info`, which can
+   have fewer entries than sweeps, so `sites[sweepno]` can raise IndexError. A related bug in
+   acq4_reader.py:1630 makes this worse: `if target > ntargets` should be `>=`, otherwise the
+   (rep, target) keys are off by one and repeated sweeps overwrite earlier ones.
+6. Missing `type 2` raises KeyError (line 615). The code only checks for `type 1` before
+   reading `cell_index['type 2']`.
+7. Possible NameError on unset variables (lines 765-766 and 939). `datainfo` is only set
+   inside a loop, and `sweepno` is used after its loop. If a protocol has no sweeps, both are
+   unset. Use `len(...)` for the counter.
+8. Exclusions are applied wrongly in `cvt()` (lines 1341-1350).
+   - `protocols in ['all','All']` compares the list of protocols, so it is never true. It
+     should test `exclusions[key]['protocols']`.
+   - If only the slice key (`ds`) matches, `exclusions[dsc]` raises KeyError.
+9. `check_conversion` can hit a NameError (lines 1520-1523). The bare `except` prints
+   `results`, which may not be set, then calls `exit()`.
+
+## Step 2 — Fix wrong data or metadata in the output
+
+10. Timing is wrong (lines 654, 801, 821, 869, 895).
+    - `timestamps_reference_time` is set to the time of conversion, not the time of the
+      experiment.
+    - Every series has `starting_time` set to the day's absolute epoch timestamp (about
+      1.7e9 s). In NWB, `starting_time` is seconds since the reference time.
+    - The fix is to use `session_start_time` as the reference and give each sweep its own
+      timestamp minus the session start.
+11. Holding potential is stored as a data offset (line 901). `VoltageClampSeries.offset` is
+    added to the data when it is read back in physical units, so this shifts every recorded
+    current. Holding belongs in metadata, not `offset`.
+12. `subject_id` is not unique (line 609). The fallback is `dset[-2]`, which is the slice
+    folder (for example `slice_000`), so different animals end up with the same ID. It should
+    use the day folder (`dset[-3]`).
+13. Sex values can be invalid (line 533). `.upper()` turns "male" into "MALE", but NWB and
+    DANDI only accept M, F, U or O.
+14. Age handling (`ISO8601_age` and lines 543-555).
+    - The `~` and `?` suffixes it adds are not valid ISO 8601, so nwbinspector or DANDI may
+      reject them.
+    - The `[ish\?]{0,3}` pattern also accepts strings like "his".
+    - Ages given in weeks, months or years are used as days when calculating date of birth.
+    - A missing age silently becomes `P0D`.
+15. Opto stimulus power is wrong (lines 851-858 and 925-932). `OptogeneticSeries` is a
+    placeholder (`data=[70.0]`, `rate=1.0`). Its unit is watts, so this records 70 W (it
+    should be 0.07 W for a 70 mW laser), and the LED gets the laser's value too.
+16. Opto stimulus is stored as an electrical stimulus (lines 1077-1156). It is saved as a
+    current- or voltage-clamp stimulus series with units of amperes or volts.
+    - The opto recordings (`id + 10000`) are left out of `recordings`, so they aren't linked
+      to the simultaneous or sequential tables.
+    - The 10000 offset can collide with real IDs once a file has more than 10000 sweeps.
+    - If a protocol has both laser and LED data, the LED overwrites the laser stimulus.
+17. Laser data is the same for every sweep (line 1096). The reader keeps only the first
+    sweep's Pockels cell trace. Both the laser and LED data are also re-read from disk for
+    every sweep (the sweep count squared).
+18. Clamp settings come from the last sweep (lines 765-766). Gain, holding and other settings
+    are applied to every sweep.
+19. `control` is misused (lines 778-781 and 797). NWB expects `control` to have one entry per
+    data point. Here it gets two values, `[tstart, tend]`, as sample indices, while the
+    description says they are seconds.
+20. Mismatched `stimulus_description` values.
+    - The CC response is always "Current Steps", even for LED and map protocols.
+    - The VC response uses the cell folder name.
+    - The stimuli use the protocol path.
+
+## Step 3 — Fix inconsistencies in how datasets and protocols are chosen
+
+21. Protocol filters don't match. `select()` (line 1291) drops `VCIV` protocols, so
+    `get_VC_data`'s VCIV branch never runs. `select()` also keeps any `Map*` protocol, but
+    only `Map_NewBlueLaser_IC/VC` are converted; the others are dropped without a message.
+22. The wrong database is loaded (lines 1379-1384). `HK_output` always loads the hard-coded
+    DCN_IC_inj pickle, whatever dataset is chosen. The path should come from config.
+    - `HK_db.iloc[index]` uses the row label as a position, which picks the wrong rows if the
+      database is filtered or not 0..n-1.
+23. Dataset routing in `main()` is broken (lines 1613-1628).
+    - The `elif id in ["DCN_IC_inj"]` branch can never run.
+    - `RJE_output` would raise TypeError, because it doesn't accept `dataset` or
+      `exclusions`, and it calls `cvt` without exclusions.
+    - `RE_CBA`, which is in your actual config, does nothing when you pass `-c`, and no
+      message is printed.
+24. The recording mode is hard-coded (line 687). It always reads the `MultiClamp1` device,
+    ignoring `dataset['device']` and `ampchannels`. The `recordingmode` argument and
+    `dataset['mode']` are overwritten. The `"I=0"` case at line 934 can never run.
+25. The rig filter never matches (lines 1323-1330). It checks whether the date string starts
+    with "Rig", and the error message prints the leftover loop variable.
+26. Weight is parsed twice (lines 561-579). This repeats `weight_with_units`; one parser is
+    enough. That function also formats numbers differently depending on input type (`.1f`
+    for numbers, unformatted for strings).
+27. The table structure doesn't match the docstring. The module docstring says the
+    simultaneous and experimental-conditions tables aren't used, but `get_one_recording` adds
+    a row to each per protocol. Each protocol also becomes its own repetition, and every
+    series is labelled `stimulus_type="square"`, including maps. A new electrode object is
+    created for each protocol.
+
+## Step 4 — Fix the CLI and portability
+
+28. Paths depend on the machine and current folder.
+    - Config is read at import time from the relative path `config/dandi_configuration.cfg`
+      (line 200), so importing the module fails unless you run from the repo root.
+    - Output paths are hard-coded to `/Users/pbmanis/Desktop/Python/Dandi_acq4`
+      (lines 1609-1610).
+29. The dataset argument is effectively required. The positional `dataset` argument has a
+    default, but without `nargs="?"` that default is ignored.
+30. Upload uses the wrong ID (lines 1637-1645). It downloads `dandiset/{id}`, using the
+    dataset name instead of `dataset_id`, and runs from `cwd=id`. `local_path` is never used,
+    and testmode doesn't block the upload.
+31. `check_conversions` may check nothing (line 1533). It finds files by name prefix (the
+    `dataset_id` or the output folder's parent name). That only works if `output_dir` equals
+    the experiment name, so it could check no files and still report nothing wrong.
+32. Type errors with string paths. `outfilename.is_file()` and `path_to_cell.parent` fail if
+    a `str` is passed, which the type hints allow.
+
+## Step 5 — Clean up
+
+- Remove unused items: `ExperimentInfo`, `validate()`, `location_column`, `appendmode`,
+  `protonum`, `IR_*` variables, `concurrent.futures`, `DynamicTable`, `generate_new_id()`
+  (redundant after a uuid is already set), and the commented-out executor blocks.
+- Stop shadowing the built-ins `slice` and `id`.
+- Move the hard-coded lab, institution, amplifier and pipette details into config.
+- Update the docstring's "license.txt" reference to `LICENSE`.
+
+## Step 6 — Verify
+
+Add pytest tests for `ISO8601_age`, `weight_with_units`, `_get_short_name` and `cvt`
+exclusions. Then convert one CC cell, one VC cell, one LED cell and one laser-map cell, and
+check each with `nwbinspector --config dandi` and a read-back (using a working version of
+`validate()`).
+
+I'd suggest doing Steps 1–2 first, since they decide whether the files already uploaded to
+001423 need regenerating. The timing, holding-offset and LED-axis bugs affect files that pass
+validation today.
+
+================================================================================
+USER (3)
+================================================================================
+Fix all of step 1.
+
+[Actions]
+- acq4_to_nwb.py: rewrote the overwrite/testmode check; np.NaN -> np.nan; `type 2` via
+  .get(); guard for protocols with no sweeps and sweep counter from nsweeps; laser sites from
+  scanner_positions with a clear ValueError if missing; LED waveform [sweepno, :]; exclusions
+  check both slice and cell keys and ['All']; check_conversion handles exceptions; testmode
+  passed through main -> HK_output -> cvt -> ConvertFile -> ACQ4toNWB; __main__ calls main().
+- acq4_reader.py:1630: `target > ntargets` -> `target >= ntargets`.
+- Added tests/test_acq4_to_nwb.py (weight tests, pytest).
+- Verified: pytest; exclusions with the real config; real conversion of DCN cell
+  2021.04.05~S00C00 into the scratchpad and nwbinspector check.
+
+--------------------------------------------------------------------------------
+CLAUDE
+--------------------------------------------------------------------------------
+All nine Step 1 fixes are in, and a real cell now converts without needing `-o`. I converted
+`2021.04.05~S00C00` from your DCN_IC_inj dataset into a scratch folder and ran nwbinspector on
+the result: there were no errors or warnings, only 4 "single row table" best-practice
+suggestions. Testmode correctly skipped writing that same cell. Nothing is committed.
+
+What changed, in acq4_to_nwb.py unless noted:
+
+1. Overwrite and testmode. An existing file is skipped unless you pass `-o`, in which case it
+   is replaced; a new file is always written. With `-t`, it now reads the cell's metadata,
+   reports the file it would write, and stops before converting the data or writing
+   anything. `-t` is now passed all the way from `main()` through `HK_output`, `cvt` and
+   `ConvertFile`.
+2. Voltage clamp. `np.NaN` is now `np.nan`.
+3. `__main__`. Running the file directly calls `main()` again. The weight test is now a
+   pytest file, tests/test_acq4_to_nwb.py; all 9 cases pass with `uv run pytest tests`.
+4. LED waveform. It now takes the current sweep's waveform (`[sweepno, :]`).
+5. Laser sites.
+   - Sites now come from `scanner_positions`, which is in the same order as the sweeps.
+   - If a sweep's scanner position can't be read, it raises a clear `ValueError` naming the
+     protocol and cell, instead of an IndexError. That stops the batch run on that cell, the
+     same way bad age or weight data already does.
+   - I also fixed the `target >= ntargets` wrap in acq4_reader.py:1630.
+6. `type 2`. A missing `type 2` now shows as "Not specified".
+7. Empty protocols. A protocol with no sweeps is skipped with a message, and the sweep
+   counter now uses the sweep count directly.
+8. Exclusions. Both slice-level and cell-level keys are now checked, and `['All']` excludes
+   everything. I tested this with your real config: the `2025.11.06_000/slice_000` "All"
+   entry, which used to raise a KeyError, now excludes the slice correctly.
+9. `check_conversion`. It no longer hits an unset `results` variable, and it reports the
+   error instead of calling `exit()`.
+
+The LED and laser fixes (4 and 5) haven't been run on real data, because DCN_IC_inj has only
+current-clamp IV protocols. They need a check against a dataset with LED or laser-map
+recordings.
+
+The `RJE_output` call in `main()` is still broken. That's item 23 in Step 3, and it can't
+currently run anyway.
+
+================================================================================
+USER (4)
+================================================================================
+Ok good, now lets do step 2.
+
+[Actions]
+- Read display_nwb.py to see how it reads opto data; checked acq4_reader per-sweep
+  timestamps (trace_StartTimes) and LED/laser readers.
+- Asked two questions:
+    Q: How should optical stimulation be stored (items 15-16)?
+    A: Full NWB ogen redesign.
+    Q: What nominal power should be recorded for the 470 nm widefield LED?
+    A: Configurable per dataset (led_power_W; NaN plus a warning if not set).
+- Found in real Thalamocortical data: the day folder timestamp can be months off (Dec 2022
+  for 2023.03.31); the reader's LED sample rate is wrong (250 Hz vs 10 kHz).
+- acq4_to_nwb.py: parse_age/ISO8601_age/sex_code; session start from cell/protocol folder
+  timestamps; per-sweep starting_time; timestamps_reference_time defaults to session start;
+  subject_id from day folder; age qualifiers in subject description; DOB only for exact ages;
+  get_one_recording rewritten (per-sweep clamp settings, no offset, holding in description,
+  no control, step times in description, stimulus_description = protocol);
+  read_optical_stimulation/add_optical_stimulation replace capture_optical_stimulation
+  (OptogeneticSeries per sweep with waveform and conversion to nominal watts; one site per
+  laser spot, one per LED protocol; no electrical-typed opto series; no id+10000 rows);
+  laser_power_W / led_power_W from dataset config.
+- acq4_reader.py: keep LaserBlue_pCell_sweeps / LaserBlue_Raw_sweeps.
+- display_nwb.py: reads the new layout (and old files): parse_location,
+  get_optical_stimulus, ospot_size; fixed CC opto location and spot-map crash.
+- config/dandi_example_configuration.cfg: laser_power_W, led_power_W.
+- Tests: parse_age, sex_code, parse_location (tests/test_display_nwb.py).
+- Verified: converted VC LED, IC LED, VC laser-map (Thalamocortical) and DCN CC cells;
+  nwbinspector; read back timing, power, sites, durations; display_nwb without windows.
+
+--------------------------------------------------------------------------------
+CLAUDE
+--------------------------------------------------------------------------------
+Step 2 is done. Four real cells convert and pass nwbinspector with only the usual "single row
+table" suggestions: the DCN current-clamp cell, plus a VC LED cell, an IC LED cell and a
+100-spot VC laser map from the Thalamocortical data. All 33 tests pass. Nothing is committed.
+
+Timing (item 10)
+- `timestamps_reference_time` now equals the session start, and each sweep's
+  `starting_time` is seconds from that start, taken from the sweep's own recorded start time.
+- The session start is now the earliest of the cell folder's and protocol folders'
+  timestamps. Neither the day nor the cell folder timestamp is reliable on its own:
+  - The Thalamocortical 2023.03.31 day folder is timestamped December 2022.
+  - In the DCN cell, the cell folder is timestamped 5 minutes after its first protocol, so
+    some sweeps came out with negative start times.
+
+Metadata (items 11–14, 18–20)
+- The holding potential is no longer stored as `offset`; it's in the response description
+  (e.g. "holding potential -0.0650 V").
+- If there's no animal identifier, `subject_id` falls back to the day folder.
+- Sex is mapped to M, F, O or U.
+- Age:
+  - `+` ages become the open interval `P150D/`.
+  - "ish" and `?` ages lose the invalid `~`/`?` suffix, and the original wording goes into
+    the subject description.
+  - Weeks, months and years are converted correctly when working out date of birth. No date
+    of birth is given for approximate or open-ended ages.
+  - A missing age is now left empty with a red warning, instead of `P0D`.
+- Clamp settings are read from each sweep's own file.
+- `control` has been removed, and the step times (in seconds) are in the stimulus
+  description.
+- `stimulus_description` is the protocol name throughout.
+
+Opto redesign (items 15–17)
+- Each sweep has one `OptogeneticSeries` holding the recorded light command waveform in
+  volts. Its `conversion` scales the largest command in the protocol to the nominal power, so
+  the peak reads 0.07 W for the laser. The description says the power isn't calibrated and
+  assumes command and power are linear.
+- Laser maps get one stimulus site per spot, with the location written as "x=102555 um,
+  y=7769 um (scanner coordinates)". The LED gets one site per protocol.
+- The opto series that were saved as electrical stimuli, and their duplicate
+  recording-table rows (`id + 10000`), are gone.
+- If a protocol uses both laser and LED, both are kept (the LED series is named
+  `OptoSeriesLED`).
+- The light data is read once per protocol instead of once per sweep. The reader in
+  acq4_reader.py now keeps each sweep's laser waveform, not only the first.
+- The LED sample rate comes from its time base. The rate the reader reports for the LED was
+  wrong (250 Hz instead of 10 kHz).
+- Laser power is read from `laser_power_W` in the dataset config (default 0.070) and LED
+  power from `led_power_W` (NaN plus a yellow warning if unset). I added both keys to
+  dandi_example_configuration.cfg. Your real `config/dandi_configuration.cfg` is gitignored,
+  so you'll need to add `led_power_W` there yourself.
+
+display_nwb.py
+- It reads the opto waveform and spot positions from the new `OptogeneticSeries`. It shows
+  the LED and laser-map files correctly when run without opening windows.
+- It should still read older files, but I could only check the location parsing with unit
+  tests: the old files linked from `000407/` point to `Dandi/test_data`, which no longer
+  exists.
+- It also fixes a crash in the old code when drawing the spot map, and a missing spot
+  location for current-clamp opto protocols.
+
+Problems found while testing (not fixed):
+- display_nwb.py drops protocols. It shows only one protocol per file when a file has
+  several (the 2023.03.31 cell has two, and only one appears). This bug was already there, in
+  how it orders acquisitions by sweep number.
+- Missing weight is still recorded as "0.0 g". The laser cell's animal has no recorded
+  weight. That's the same kind of placeholder as the old `P0D` age; I'd fold it into item 26
+  in Step 3.
+- The file name differs in case. Git tracks the file as `src/acq4_to_NWB.py`, but the
+  `acq4_to_nwb` command imports `src.acq4_to_nwb`. That works on a Mac but would fail on
+  Linux.
+
+Files already uploaded to 001423 were made with the old timing, subject IDs and holding
+offset, so they would need to be regenerated and re-uploaded to pick up these fixes.
+
+================================================================================
+USER (5)
+================================================================================
+Do the next step. Also write the session dialog to claude_edits.txt. I want the full dialog
+we have here for reference. Remind me about the config/dandi_configuration.cfg  issue and
+the led_power_W at the end of this session before I clear it.
+
+[Actions]
+- Checked the ephys experiments.cfg (databasepath/directory/datasummaryFilename) and the
+  database `date` column (Thalamocortical dates include the rig, e.g. "Rig2/2023.03.31_000").
+- acq4_to_nwb.py:
+  - weight_with_units rewritten (one parser; None for missing/zero/unreadable); duplicate
+    weight parsing in acq4tonwb removed; red warning when weight is missing.
+  - known_protocols table + protocol_type(); select() uses it and lists skipped protocols.
+  - set_amplifier_name sets amplifier_prefix and ampchannels from the configured device.
+  - get_protocol_data replaces get_CC_data/get_VC_data: mode read from the configured
+    amplifier, checked against the protocol type.
+  - Removed the recordingmode argument (acq4tonwb, ConvertFile).
+  - One electrode per amplifier channel per cell; one simultaneous row per sweep; one
+    sequential row per protocol with its stimulus type; repetitions group repeats of a
+    protocol; no experimental-conditions table; module docstring updated.
+  - convert_dataset() replaces HK_output/RJE_output; database path from the experiments file;
+    iterrows(); main() routes every dataset through it, reports a missing experiment, and
+    supports an optional `experiment` key.
+  - cvt rig filter checks the folders in the path.
+- config/dandi_example_configuration.cfg: `mode` marked unused; `experiment` key documented.
+- Tests: weight (None cases), protocol_type, select (48 tests pass).
+- Verified: real conversions (4 cells + a DCN cell with repeated protocols), nwbinspector,
+  table row counts; `uv run acq4_to_nwb DCN_IC_inj -c -t` (98 existing skipped, 6 would be
+  written, no errors); `uv run acq4_to_nwb RE_CBA -c -t` (clear message).
+
+--------------------------------------------------------------------------------
+CLAUDE
+--------------------------------------------------------------------------------
+Step 3 is done. Real cells from both datasets convert, and every file passes nwbinspector:
+the only messages are "single row table" suggestions on files with one protocol. All 48
+tests pass. Nothing is committed.
+
+Protocol selection (item 21)
+- One table, `known_protocols`, lists the protocols that can be converted, with their
+  recording mode, description and stimulus type. `select()` and the converter both use it.
+- VCIV protocols are now converted.
+- Protocols not in the table (e.g. `CC_Spont_ZeroI_000` or other `Map_*` protocols) are
+  listed as "not converted" instead of being dropped silently.
+
+Dataset routing (items 22–23)
+- `HK_output` and `RJE_output` are replaced by one `convert_dataset()`, used for every
+  dataset.
+- The datasummary path comes from your ephys experiments file
+  (`databasepath`/`directory`/`datasummaryFilename`). Rows are read with `iterrows()`, so a
+  filtered database no longer picks the wrong rows.
+- If the dataset isn't in the experiments file, `main()` says so and lists the experiments
+  that are there. A new optional `experiment` key in the dataset config lets the two names
+  differ.
+- `uv run acq4_to_nwb DCN_IC_inj -c -t` now runs end to end: 98 cells are already converted
+  and 6 would be written.
+
+Amplifier and mode (item 24)
+- The amplifier comes from the dataset's `device` setting (`MultiClamp1.ma` gives device
+  `MultiClamp1`, channel 1) instead of being hard-coded.
+- Each protocol's mode is read from that amplifier in the acq4 data. A protocol is skipped
+  with a message if that amplifier wasn't used, or if its mode doesn't match the protocol
+  type (e.g. a VC protocol recorded in CC).
+- The unused `recordingmode` argument is gone, and `mode` in the example config is marked
+  as unused. `get_CC_data` and `get_VC_data` are merged into one `get_protocol_data`.
+
+Rig filter (item 25)
+- A correction to my review: Thalamocortical's `date` column includes the rig
+  (`Rig2/2023.03.31_000`), so the old filter did work for that dataset.
+- It now looks for the rig among the folders in the full path, so it works either way, and
+  the message no longer prints a leftover loop variable.
+
+Weight (item 26)
+- There is now one weight parser, and numbers and text are formatted the same way (`20.25`
+  gives "20.25 g").
+- A missing, zero or unreadable weight is now left empty with a red warning, instead of
+  "0.0 g". The laser-map cell's animal is one of these.
+
+Table structure (item 27)
+- Each cell gets one electrode per amplifier channel (`electrode1`), instead of a new
+  electrode for every protocol.
+- Each sweep is its own simultaneous row.
+- Each protocol is a sequential row with a stimulus type ("current steps", "LED", "laser
+  scanning", ...).
+- Repeats of a protocol are grouped into one repetition. In a DCN cell, `..._posonly_001`
+  and `_002` became one repetition.
+- The experimental-conditions table is no longer written, and the module docstring now
+  describes this layout.
+
+One RE_CBA problem from Step 4 remains: `dataset_id` is `None` in your config, so once
+`experiment` is set, building the output path will fail.
+
+I've written the session to claude_edits.txt. It has your messages and my replies in full,
+with a short note of what each round of tool calls did; tool outputs are summarized, not
+copied. The file isn't tracked by git.
+
+Reminders before you clear this session:
+- config/dandi_configuration.cfg is gitignored, so my edits to the example config didn't
+  reach it. For each dataset with LED protocols, add `led_power_W: <watts>`; otherwise LED
+  power is recorded as NaN, with a yellow warning. You can also add `laser_power_W` (the
+  default is 0.070).
+- RE_CBA in that file needs `experiment: "CBA_Age"` (or `"GlyT2_NIHL"`) and a real
+  `dataset_id` before it can be converted.
+
+================================================================================
+USER (6)
+================================================================================
+Ok. I added experimnet: "CBA_Age" for the RE_CBA and "DCN-IC_inj" for the other entry in the
+configuratoin file. the data set is currently 00999 since this data is not submitted to the
+Dandi archive (nwb files were generated and sent to FigShare instead). Neither of these
+datasets has laser-evoked responses, but that is a good note. I set a default on these.
+
+Next step please.
+
+[Actions]
+- Checked config/dandi_configuration.cfg: experiment "DCN_IC_inj" (underscores) and
+  "CBA_Age"; RE_CBA dataset_id "009999"; laser_power_W set; both datasets resolve.
+- acq4_to_nwb.py:
+  - read_config()/project_root/default_config_file replace the module-level config read.
+  - main(): --config option; dataset argument required; output paths relative to the
+    project directory; clear exits for unknown dataset or missing dataset_id.
+  - upload_to_dandi(): dandi download --download dandiset.yaml --existing refresh (by
+    dataset_id), organize (dry, then real), validate; stops on the first failure; skipped
+    in testmode; prints the final `dandi upload` command (not run).
+  - check_conversions(): all *.nwb in the output directory; check_conversion() uses the
+    nwbinspector "dandi" config, treats best-practice suggestions as OK, summarizes.
+  - acq4tonwb(): path arguments converted to Path.
+  - led_power_W warning only when an LED protocol is converted.
+- git mv src/acq4_to_NWB.py -> src/acq4_to_nwb.py; references updated in display_nwb.py
+  and display_acq4.py.
+- README.md: usage and upload sections updated.
+- Verified: 48 tests; CLI from /private/tmp (help, unknown dataset, -c -t, -u -t);
+  `acq4_to_nwb DCN_IC_inj -v` (94 of 94 OK); check_conversions on test files and an empty
+  folder; str-path conversion; LED warning only for the LED cell. The DANDI steps were not
+  run.
+
+--------------------------------------------------------------------------------
+CLAUDE
+--------------------------------------------------------------------------------
+Step 4 is done. `acq4_to_nwb` now runs from any folder, and `-v` on your existing
+DCN_IC_inj output reports 94 of 94 files OK. All 48 tests pass. Nothing is committed. I
+didn't run the DANDI steps behind `-u`, because they contact the archive.
+
+Paths and config (item 28)
+- The config file is now read when `main()` runs, not when the module is imported, and it
+  is found relative to the project folder. A new `--config` option lets you use a different
+  file.
+- `output_dir` and `dandi_output_dir` are taken relative to the project folder (absolute
+  paths work too), replacing the hard-coded `/Users/pbmanis/...` path.
+- An unknown dataset name or a missing `dataset_id` now stops with a message that lists the
+  configured datasets.
+
+Dataset argument (item 29)
+- `dataset` is now explicitly required; the old default (`HK_CN_IC`), which argparse
+  ignored, is gone.
+
+Upload (item 30)
+`-u` runs these steps in order, stopping at the first failure:
+1. `dandi download --download dandiset.yaml --existing refresh` for `dataset_id`, into
+   `<dandi_output_dir>`. This fetches only the dandiset metadata that `organize` needs; the
+   old code downloaded every file in the dandiset.
+2. `dandi organize` (a dry run, then for real) and `dandi validate`, inside
+   `<dandi_output_dir>/<dataset_id>`.
+
+The final `dandi upload` is still yours to run; the script prints the command. `-t` skips all
+of these steps. For RE_CBA, the download will fail and stop, since `009999` isn't a DANDI
+dataset.
+
+Checking (item 31)
+- `-v` checks every `.nwb` file in `<output_dir>/<dataset_id>` instead of filtering by name.
+- It now uses nwbinspector's DANDI configuration, as the README's `--config dandi` does.
+- A file counts as OK when nwbinspector has only best-practice suggestions for it; real
+  problems are printed one per line, followed by a count of OK files.
+
+String paths (item 32)
+- `acq4tonwb` converts its path arguments to `Path`, so plain strings work. I tested this
+  with a real conversion.
+
+Also:
+- Git now tracks the file as `src/acq4_to_nwb.py` (it was `acq4_to_NWB.py`), so the command
+  will import on Linux. I updated the references in `display_nwb.py` and `display_acq4.py`.
+- The README's usage and upload sections now describe the config-based workflow and the
+  `-u` steps.
+- The `led_power_W` warning now appears only when an LED protocol is converted, so it won't
+  print for every cell in your two datasets.
+
+Your config is fine: the file has `experiment: "DCN_IC_inj"` with underscores (the hyphen
+was only in your message), which matches the experiments file. Both datasets now resolve.
+
+I've added this round to claude_edits.txt.
+
+Still to do: Step 5 (removing unused code, renaming variables that shadow built-ins, and
+moving the hard-coded lab and amplifier details into config) and Step 6 (more tests and a
+read-back check). The display_nwb.py problem from Step 2 (only one protocol shown per file)
+is also still open.
+
+Reminder before you clear this session: `led_power_W` isn't set for either dataset in
+config/dandi_configuration.cfg, which is gitignored. That's fine for now because neither
+dataset has LED protocols, but add it for any dataset that does.
+
+================================================================================
+USER (7)
+================================================================================
+Before we go to step 5, let's test the display_nwb.py file, first writing a simple gui
+wrapper with a directory chooser that lists the directory and allows us to step through the
+data for each day, or to choose one day.
+
+[Actions]
+- display_nwb.py: readfile() now reads all protocols first (grouped by protocol name, in
+  sweep order, sorted by recording time) via read_protocol(), stores session/subject info,
+  and closes the file. plot_traces() draws into a given figure (or a new one) and returns
+  it; no mpl.show() inside. Fixed: only one protocol per file shown; map colors averaged
+  over the wrong axis and used a fixed 0.5 s stimulus time (now per spot, from the light
+  onset); clicking a spot only worked for spot 0; trace offset chosen by protocol name (now
+  by recording mode); NWB file never closed. Panels C/D blank with a label when there is no
+  optical stimulus; no spot map for one-position (widefield LED) stimulation. CLI
+  display_nwb still shows one window per protocol.
+- New src/browse_nwb.py (PyQt6 + embedded matplotlib): directory chooser; tree of days ->
+  cells (files found recursively; day from the file name, both yyyy.mm.dd and yyyy-mm-dd);
+  protocol selector; previous/next day, file and protocol buttons with keyboard shortcuts;
+  file information panel. pyproject.toml: `browse_nwb` command; uv sync.
+- Verified offscreen: all 8 protocols in 5 test files (DCN CC, Thalamocortical LED and laser
+  map); 61 protocols in the older-format 001423 dandiset folder without errors; day/file/
+  protocol stepping; spot picking; screenshots checked; display_nwb CLI; 48 tests pass.
+
+--------------------------------------------------------------------------------
+CLAUDE
+--------------------------------------------------------------------------------
+The browser is in place and display_nwb.py has been tested with it. Run it with:
+
+    uv run browse_nwb                  # then use "Choose directory…"
+    uv run browse_nwb DCN_IC_inj/001423
+
+I tested it offscreen: it stepped through all 8 protocols in the 5 test files (DCN current
+clamp; Thalamocortical LED and laser map) and 61 protocols in the older-format files under
+001423/ with no errors, and I checked screenshots of each kind of page. I couldn't click
+through the directory dialog itself, since it needs a real screen. 48 tests pass. Nothing is
+committed.
+
+The browser (src/browse_nwb.py)
+- "Choose directory…" finds .nwb files in the folder and its subfolders, so dandiset folders
+  with sub-*/ subfolders work. A folder can also be given on the command line.
+- The left panel groups the files by recording day, taken from the file name, and lists the
+  cells under each day. Clicking a day shows its first cell.
+- A drop-down at the top selects the protocol. The buttons step through the protocols
+  (Ctrl+←/→, continuing into the next or previous file), the files (Ctrl+↑/↓) and the days
+  (PgUp/PgDown).
+- A panel below the list shows the session and subject information and lists the file's
+  protocols.
+
+Bugs fixed in display_nwb.py, found while testing
+- Files with several protocols showed only one. The 2023.03.31 cell now shows both of its
+  LED protocols, in the order they were recorded.
+- The laser-map colours averaged over the wrong axis (one value per time sample instead of
+  one per spot), and assumed the light came on at 0.5 s. Each spot is now coloured by its
+  mean response in the 20 ms after the light onset (found from the light command) minus the
+  20 ms before.
+- Clicking a spot in the map only worked for spot 0; it now shows the clicked spot's trace.
+- The offset between stacked traces was chosen from the protocol name, so `Map_..._IC`
+  current-clamp maps got a current-sized offset. It now follows the recording mode.
+- The NWB file was never closed; it is now closed after reading.
+- Protocols without optical stimulation show "No optical stimulation" instead of two empty
+  axes. Widefield LED protocols, where the light is at one position, no longer draw a single
+  large circle as a "map".
+
+Reading and plotting are now separate: `ReadNWB` reads every protocol, and `plot_traces()`
+draws into a figure you pass in or a new one. The command-line `display_nwb` still opens
+one window per protocol.
+
+I've added this round to claude_edits.txt.
+
+================================================================================
+USER (8)
+================================================================================
+not bad. The files from 00407 do not display, because they are not found. Do they need to
+be regenerated?
+
+[Actions]
+- 000407/ holds 515 .nwb entries, all symbolic links, all broken: 383 point to
+  /Users/pbmanis/Desktop/Python/Dandi/test_data/ (no longer exists) and 132 to
+  ../../test_data (Dandi_acq4/test_data, which does not exist).
+- Searched the home folder (Spotlight and find) and the HK_Collab folders on Pegasus_004 and
+  Manis26_001: no copies of the Thalamocortical NWB files.
+- DANDI API: 000407 (and 001423) return 401 without credentials, i.e. embargoed.
+- browse_nwb.py: skips .nwb entries that are not readable files and reports how many.
+
+--------------------------------------------------------------------------------
+CLAUDE
+--------------------------------------------------------------------------------
+Yes. The files behind 000407/ are gone from this computer, so you'll need to regenerate
+them, or download them from DANDI.
+
+- All 515 .nwb entries in 000407/ are links, and every one is broken. 383 point to
+  /Users/pbmanis/Desktop/Python/Dandi/test_data/, the project's old folder, which no longer
+  exists. The other 132 point to ../../test_data (Dandi_acq4/test_data/), which doesn't
+  exist either.
+- I found no copies anywhere in your home folder or in the HK_Collab folders on Pegasus_004
+  and Manis26_001.
+
+Your two options:
+1. Regenerate them from the acq4 data (recommended). The raw Thalamocortical data on
+   Pegasus is readable, and I converted three of its cells during Steps 2–3. New files would
+   include the Step 1–3 fixes, whereas the copies on DANDI have the old timing, subject IDs,
+   holding-potential offset and opto layout, so they need replacing anyway.
+   config/dandi_configuration.cfg has no Thalamocortical entry yet. You'd add one with
+   `dataset_id: "000407"`, `experiment: "Thalamocortical"` (its name in the HK_Collab
+   experiments file), the dataset's keywords, experimenters, grant and IACUC details, and
+   `led_power_W`, since this dataset does have LED and laser protocols. Then:
+
+       uv run acq4_to_nwb Thalamocortical -c
+       uv run browse_nwb Thalamocortical/000407
+
+2. Download the copies already on DANDI. 000407 is embargoed (the archive returns 401
+   without credentials), so this needs your DANDI API key:
+   `dandi download https://dandiarchive.org/dandiset/000407/draft`. You'd get the files
+   exactly as uploaded, with the old bugs, and the browser does read that older layout.
+
+000407/ itself only holds the folder structure from an earlier `dandi organize`, so it can
+be deleted once you've regenerated the files.
+
+I also changed the browser to skip broken links. It now says "515 .nwb entries skipped (not
+found: broken links?)" instead of showing blank pages.
+
+================================================================================
+USER (9)
+================================================================================
+Ok, let's see if we can regenrate them with the new tools. The original Dandi dataset is out
+of date and would have to be updated eventually anyway (it uses an earlier version of the
+file format and may be incomplete with respect to the current Dandi expectations, so would
+not necessarily pass the tests).  Running now.
+
+[Actions]
+- Did not start a second conversion (the user's run was in progress).
+- Checked the new Thalamocortical entry in config/dandi_configuration.cfg (dataset_id
+  000407, experiment Thalamocortical, led_power_W 0.005, laser_power_W 0.070).
+- Database: 445 rows, 392 cells with convertible protocols (before 19 exclusion entries).
+- nwbinspector (DANDI config) on the 46 finished files: 46 OK.
+- browse_nwb offscreen on the same files: 445 protocols shown, no errors (140 CC, 302 VC
+  LED, 3 CC LED; no laser maps among these early files).
+
+--------------------------------------------------------------------------------
+CLAUDE
+--------------------------------------------------------------------------------
+So far the regenerated files look good. I left your run alone and checked the files it had
+finished, leaving out the newest in case it was still being written:
+
+- nwbinspector, with the DANDI configuration, passes all 46 finished files.
+- The browser displays all 445 protocols in those files with no errors: 140 current-clamp
+  IVs, 302 voltage-clamp LED protocols and 3 current-clamp LED protocols. None of these
+  early files has a laser map yet.
+- The database has 392 cells with protocols that can be converted (before your 19 exclusion
+  entries), so the run is roughly an eighth done.
+
+One point about your config: the comment on `led_power_W` says "otherwise 0.0". Don't set
+it to 0.0. The code scales the LED waveform by that power, so 0.0 would record every LED
+pulse as 0 W, which looks like a real measurement. For a dataset whose LED power you don't
+know, leave `led_power_W` out; the power is then recorded as NaN, with a warning. Your 0.005
+for Thalamocortical is fine.
+
+When the run finishes, `uv run acq4_to_nwb Thalamocortical -v` checks every file. Then
+`uv run browse_nwb Thalamocortical/000407` lets you look through them.
+
+================================================================================
+USER (10)
+================================================================================
+Run completed - seems good. Evidently I need to go to the lab and get the ages and weights
+for some of the subjects - it looks like the list is incomplete.
+
+Next up on this suite, we need to figuer out how to store the images and videos (or maybe
+just the in-focus parts of the videos) For Dandi in a way that they can be cross referenced
+to the physiology data. [...] So I have two broad tasks for you:
+1. Figure out the best way to add the images to a Dandi archive so that they are
+   cross-referenced to the original data by slice and cell).
+2. Figure out if there is a good way to automatically generate the mosaics and overlaid
+   high-magnification images for comparison / inclusion in the archive. [...] implement it
+   in an experimental manner, explain what it does and what heuristics it uses, and show me
+   the results for a few randomly selected cells. [...]
+(Full message: user-supplied in the session; abridged here.)
+
+[Actions]
+- Read-only inventory of Thalamocortical and DCN_IC_inj raw trees: ~9,100 images (7.5 GB),
+  449 videos (17.8 GB; largest 8.0 GB), 593 images with userTransform (no rotations),
+  3 unreadable .index files, inconsistent fluorescence folder names.
+- Checked dandi 0.75.1 source: slice_id/cell_id come from the DandiIcephysMetadata
+  lab_meta_data (ndx-dandi-icephys 0.4.0 on PyPI) -> _slice-/_cell- in file names and a
+  wasDerivedFrom BioSample chain; ZARR_EXTENSIONS .zarr/.ngff; videos only as
+  mp4/avi/wmv/mov/flv/mkv; BIDS subtree allowed via dataset_description.json.
+- New src/acq4_mosaic.py (experimental), script acq4_mosaic in pyproject.toml,
+  mosaic_test/ added to .gitignore. 48 tests pass.
+- Ran on 5 random cells (seed 2026) + Rig4/2021.05.04 slice_002; outputs in mosaic_test/.
+- Did not modify any raw data, .index or .mosaic files.
+
+--------------------------------------------------------------------------------
+CLAUDE
+--------------------------------------------------------------------------------
+(See the chat reply for round 10; the same text follows.)
+Both tasks are done as an experimental first version. I recommend keeping everything in NWB
+and linking images to recordings by slice and cell IDs that DANDI already understands.
+src/acq4_mosaic.py builds slice mosaics with fluorescence overlays. It works well on 4x
+brightfield and fluorescence tiles, and it finds some objective-label errors automatically.
+It cannot place 40x/63x images more precisely than the stage did.
+
+1. DANDI layout and cross-referencing
+- Cross-reference: DANDI reads slice_id and cell_id from a DandiIcephysMetadata object in
+  lab_meta_data (ndx-dandi-icephys 0.4.0, on PyPI). It uses them in the file name
+  (sub-X_ses-Y_slice-S_cell-C_icephys.nwb) and records the chain subject -> slice -> cell in
+  the asset metadata. Adding that object to each icephys file is a small change to
+  acq4_to_nwb.py. I haven't checked that the extension works with pynwb 3.
+- Images: one image NWB file per slice (sub-X_ses-Y_slice-S_image.nwb), with the same
+  subject, session and slice_id, holding:
+  - the original tiles, losslessly compressed;
+  - a table of placements (stage position, correction, method, objective, pixel size, notes,
+    original acq4 path);
+  - the stitched mosaic, one image per channel plus an RGB preview;
+  - a cells table (cell_id, position, source, name of the icephys file).
+- Each icephys file also gets the cell's own images and its position in stage coordinates.
+  These are only a few small tiles, and they make each file usable on its own.
+- Videos: store only the sharpest frame(s) as images. DANDI accepts full videos only as
+  MP4/AVI/... linked from an ImageSeries, not as .ma files.
+- Zarr: DANDI accepts .zarr/.ngff, and OME-Zarr gives browser viewing (Neuroglancer).
+  But it belongs to the BIDS microscopy layout, which would be a separate subtree next to
+  the NWB files. At these sizes (7.5 GB of raw images, tens of MB per mosaic), compressed
+  HDF5 in NWB is enough. Add OME-Zarr later only if you want web viewing.
+- The laser-map spot coordinates are in the same stage frame, so map sites could be drawn
+  on the mosaics.
+
+2. Mosaics (uv run acq4_mosaic <slice_dir> or --random N --root <data root>)
+- Finds images and videos in the slice folder and its subfolders, skipping protocol
+  folders, and reads position, scale and objective from .index.
+- Channel comes from the folder name: FITC/GFP/YFP -> green; TRITC/mCherry/tdTomato/DiI
+  -> red; Lucifer yellow/Alexa -> yellow. Typos (FTIC, TRITTC) are handled. Folders named
+  garbage/BAD are skipped. I tried classifying by intensity and dropped it because it was
+  unreliable, so images in unnamed folders are treated as brightfield.
+- Videos over 500 MB are skipped. For the others the sharpest frame is used.
+- Base: the largest slice-level brightfield set at the lowest magnification. Overlapping
+  pairs are registered (masked normalized cross-correlation, within 120 um), solved together
+  by least squares with a weak pull toward the stage positions, and inconsistent pairs are
+  rejected. Residuals were 0.5-1.8 um.
+- Other groups (folder x channel x magnification x time run) are placed first as a whole
+  (within up to 1.5 mm) and then image by image (within 30 um). Fluorescence is compared
+  with brightfield through gradient magnitude, which matches strings and tissue edges
+  whatever their contrast. A placement is used only if its peak is clearly better than the
+  alternatives; otherwise the images stay at their stage positions and the report says so.
+- Objective check: images of the same spot taken one after another look alike at their
+  own pixel size. An image that matches neighbours with a different objective label is
+  relabelled and placed from the image it matches.
+- Outputs per slice: mosaic.png (stage vs registered), qc.png (edges of each moved group
+  on the base), a close-up per cell, and report.json (every image, its placement and the
+  problems found).
+
+Results, 5 random cells (seed 2026) plus one test slice:
+- Rig4 2021.06.08 s0 (cell_000): 20 brightfield tiles stitched; FITC (-2,+10) and TRITC
+  (-28,+3) um; two images labelled 63x found to be 4x.
+- Rig2 2023.08.11 s1 (cell_003): one brightfield tile only, so the 15 eYFP tiles are the
+  base and mCherry is registered to them. In the 40x brightfield image, the pipette tip is
+  exactly at your annotated cell position.
+- Rig2 2023.10.30 s3 (cell_009): the step in the strings at a tile boundary is fixed.
+  TRITC was not confident and stays at the stage position.
+- DCN 2021.04.27 s0 (cell_003): an image labelled 63x is really 10x.
+- DCN 2025.02.13 s0 (cell_001): FITC/TRITC registered at NCC 0.83/0.95.
+- Rig4 2021.05.04 s2 (test slice): on the QC overlay, the automatic TRITC offset aligns
+  strings and edges better than your manual one. Three objective-label errors found.
+
+Limitations:
+- 40x/63x images can't be placed against a 4x base (a 63x field is about 20 pixels there),
+  so they stay at stage accuracy.
+- Mislabelled images with no correctly labelled neighbour are missed (e.g.
+  2021.05.04 s2 cell_001/video_000).
+- One likely false placement: 2021.05.04 s2 cell_003/image_002 at 372 um.
+- Vignetting seams remain.
+- The backlash fit is inconsistent between slices, so I don't use a hysteresis model.
+- Your manual corrections are not consistent enough to serve as ground truth.
+
+Data problems found: 3 unreadable .index files; Fiji leftovers not in .index; a misplaced
+slice_0022021.05.04_s2_BF_fused.png at day level; the 8.0 GB video in
+Rig2/2023.10.16_000/slice_001/cell_002; a cell folder directly under a day
+(Rig2/2022.12.15_000/cell_002); NewFolder_000 folders (101 images); DCN "20x" images with a
+1x pixel size. Also, Dandi_dataset_information.txt on Pegasus_004 contains your DANDI API
+keys in plain text; I did not use them.
+
+Nothing on Pegasus_004 was changed.
+
+Decisions for you: (1) Is this layout OK, so I add DandiIcephysMetadata and write the image
+files? (2) Should I run the audit over all slices? (3) Should I write the placements as a
+.mosaic file, so you can review and nudge them in your Mosaic Editor without touching the
+raw data?
+
+Reminder before you clear the session:
+- config/dandi_configuration.cfg is gitignored, so changes to the example config don't
+  reach it.
+- Set led_power_W only for datasets with LED protocols; leave it out (NaN), not 0.0,
+  otherwise.
+
+================================================================================
+USER (11)
+================================================================================
+where is mosaic_test/ ?
+
+--------------------------------------------------------------------------------
+CLAUDE
+--------------------------------------------------------------------------------
+In the project folder: /Users/pbmanis/Desktop/Python/Dandi_acq4/mosaic_test/ (gitignored,
+so some editors hide it). `open mosaic_test` shows it in Finder. Files are named
+<rig or dataset>~<day>~<slice>~<what>: mosaic.png, qc.png, cell_NNN.png, report.json.
+
+================================================================================
+USER (12)
+================================================================================
+I don't see a rig2_slice_001-cell_003.
+Were the cell annotated positions based on my prior mosaics, or were the generated de novo
+from examination of this data set?
+The tiling alignment is pretty good, but in some (on the right, where the registrarion is
+shown) the nylon threads are offset at the junction between tiled images. Thus, it doesn't
+appear that the alignment is complete.
+
+[Actions]
+- Confirmed the file exists: mosaic_test/Rig2~2023.08.11_000~slice_001~cell_003.png.
+- Found that many base tiles had never been stitched (e.g. 5 of 8, 8 of 20): tiles overlap
+  by only 40-200 um strips (2-7% of the area), below the 8% threshold, and the stage error
+  (up to ~90 um) exceeded the 120 um window margin.
+- Now tries every pair sharing an edge, 200 um window, absolute minimum overlap.
+- Found the aperture problem (strings along a strip leave the along-strip shift undefined;
+  a loop of 4 pairs disagreed by ~50 um in x, <1 um in y); now each pair is weighted by the
+  2x2 curvature of its NCC peak and the solve drops the worst pair until consistent.
+- Measured thread offsets across junctions directly from intensity profiles in the overlap:
+  3-9 um after (70-80 um at stage positions) on Rig2 2023.10.30 s3.
+- Reran all 6 slices: all base tiles stitched except 6 of 15 in the fluorescence-only base
+  of Rig2 2023.08.11 s1; residuals 0.2-2.9 um.
+
+--------------------------------------------------------------------------------
+CLAUDE
+--------------------------------------------------------------------------------
+- The file is there, named with ~ separators:
+  mosaic_test/Rig2~2023.08.11_000~slice_001~cell_003.png.
+- The cell positions marked "annotated" come from your Mosaic Editor files (the
+  CellCanvasItem in <day>.s<n>.mosaic); other cells are marked at the centre of their
+  highest-magnification image. Your annotation was probably placed on that same 40x image,
+  so the pipette tip landing on it confirms that I read your positions and the images in the
+  same coordinates. It does not independently validate my alignment; I overstated that.
+- You were right about the threads. Two faults in the stitching: (1) most neighbouring pairs
+  were never compared (overlaps are thin strips, below my area threshold), so many tiles
+  stayed at the stage positions; (2) strings running along a strip fix the shift across it
+  but not along it, and the solver weighted both directions equally. Both are fixed: every
+  edge-sharing pair is tried, and each is weighted by how sharply its match is defined in
+  each direction. On Rig2 2023.10.30 the threads now miss by 3-9 um across junctions
+  (70-80 um at stage positions): 1-3 pixels, which may still be visible at full zoom.
+- Remaining: the fluorescence-only base (Rig2 2023.08.11) still leaves 6 of 15 tiles at the
+  stage positions; vignetting at tile edges limits accuracy. The outputs in mosaic_test/ are
+  regenerated.
+
+================================================================================
+USER (13)
+================================================================================
+Rig2/2023.10.30_000~slice_003-qc.png shows the offset still so this may not have solved the
+problem. Also Rig4/2021.06.08_000/slice_000.
+Are there any here where the cell position has been inferred computationally, rather than
+by me placing it in the mosaic file? Which ones? Should use a different marker for that (or
+use a blue marker instead of white).
+If you identify the pipette, please draw it on the image(s) - thin black/white (side by side)
+lines marking the key image features would be helpful. How do you know it is a pipette?
+Are the + markes the center of the high-magnification images?
+
+[Actions]
+- Found the Rig2 2023.10.30 qc.png was stale (22:09, before the fix): QC was written only when
+  a group moved. Now always rewritten (or removed if there is nothing to show).
+- Found the fluorescence tiles were moved only as a block (+/-30 um per tile), never stitched
+  with each other. Added a joint solve of all slice-level tiles at the base magnification
+  (same-channel and cross-channel pairs, direction-weighted), starting from the group offsets.
+  Results: 2021.06.08 s0: 46 tiles, 103 pairs, residual 1.3 um; 2023.10.30 s3: 16 tiles,
+  18 pairs, 0.9 um; 2021.05.04 s2: 49 tiles, 233 pairs, 1.3 um; 2023.08.11 s1: 11 of 26
+  not connected.
+- 2023.10.30 s3: TRITC threads ~100 um from brightfield threads while the tissue edge
+  aligns; TRITC taken 1 min after brightfield at the same focus. Likely parallax of the
+  out-of-focus threads under oblique transmitted illumination (Rig2?).
+- Cell markers: white circle / white + = placed in the .mosaic file; blue square / blue x =
+  inferred (centre of highest-magnification image).
+
+--------------------------------------------------------------------------------
+CLAUDE
+--------------------------------------------------------------------------------
+(See the chat reply for round 13.)
+Summary of the round 13 reply: the Rig2 2023.10.30 QC file was stale (bug, fixed); the
+fluorescence tiles had never been stitched with each other (now one joint solve of all
+slice-level 4x tiles); on Rig2 the TRITC threads sit ~100 um from the brightfield threads
+while the tissue edge aligns (suspected parallax under oblique illumination; asked about
+Rig2 illumination); list of inferred cell positions given, now drawn in blue; pipette was
+not detected by code; + marks the cell position (for inferred cells, the image centre).
+
+================================================================================
+USER (14)
+================================================================================
+Interesting. How "by eye" ? You must have done some image processing as technically you do
+not have biological eyes.
+Another edge issue: DCN_IC_inj/2025.02.23_000/slice_000 mosaic. The top third is a duplicate
+of the middle third. It is interesting that the image can be connected like that, but it is
+a pretty bad match. Here, the experimenter probably shifted the slice between images,
+resulting in a large positional offset. Large offsets > 250 microns should probably be
+flagged and not used in these alignments.
+On the othre hand the alignment for Rig2/2023.10_30_000/slice_003 now looks pretty good.
+There is a bit of a horizontal shift visible in the edges, but the nets line up quite well.
+Lets continue to fix the alignment. Also, white markers do not show all the time on the
+grayscale images - se we should use a fairly bright, saturated color.
+to be continued tomorrow. append to claude_edits.txt, and remember this discussion.
+
+[Actions]
+- No code changes this round.
+- Checked corrections > 250 um in all reports: none in DCN 2025.02.13 s0 (so the duplicated
+  top third comes from the raw stage positions, not from my stitching); two elsewhere:
+  Rig4 2021.05.04 s2 cell_003/image_002 (363 um) and Rig4 2021.06.08 s0 FITC/image_026
+  (256 um).
+- Saved memory: user profile, image-mosaic project state and next steps, display feedback
+  (saturated marker colours), alignment/claims feedback (flag > 250 um; label visual
+  impressions), config reminders.
+
+--------------------------------------------------------------------------------
+CLAUDE
+--------------------------------------------------------------------------------
+"By eye": no image-processing code was run to find the pipette. The rendered PNG was given to
+me as an image, and the vision part of the model interpreted it, the way it reads any
+picture. That is a learned visual judgement, not a measurement: it gives no coordinates or
+confidence I can check, and it can be wrong. I should have said that rather than "by eye".
+A pipette detector would be code whose output can be checked.
+
+DCN_IC_inj 2025.02.13 slice_000 (I ran .13; I assume .23 is a typo): none of my corrections
+there is larger than 250 um, so the duplicated top third is at the raw stage positions. My
+stitching neither caused nor detected it. Agreed on the rule: offsets > 250 um will be
+flagged and not used. Only two corrections are that large now: Rig4 2021.05.04 s2
+cell_003/image_002 (363 um, already suspect) and Rig4 2021.06.08 s0 FITC/image_026
+(256 um). For the duplicated slice, the job is to detect the same tissue at two stage
+positions and flag it, not to move tiles by a millimetre.
+
+Next session: cap moves at 250 um and flag; detect duplicated content; look at the residual
+horizontal shift on Rig2 2023.10.30; bright saturated marker colours; optionally the pipette
+detector; your answer on Rig2 illumination.
+
+Reminders: config/dandi_configuration.cfg is gitignored, so example-config changes don't
+reach it; led_power_W only for LED datasets, otherwise leave it out (NaN), not 0.0.
+
+================================================================================
+USER (15)
+================================================================================
+(Session 2026-11-11.) Q: what determines the constants in resampled()/features() (esp. the last
+two lines of features)? Then: 1. put that description in docs/"registration methods.md";
+2. numpy-style docstrings for every class/function in acq4_mosaic.py (keep existing docstrings);
+3. numpy docstrings in the other source files; 4. add sphinx, docs with Usage (acq4 -> DANDI
+workflow, browse_nwb, display_nwb) and API sections; 5. carry the .index metadata of each image
+forward (with magnification and userTransform corrections), for atlas alignment with
+ephys/tools/cochlear_nucleus_alignment.py; should we write an acq4-style .mosaic file?
+6. more examples (after 7); 7. better projection of video z-stacks (no fixed focal step; only
+in-focus regions; soma flare).
+
+[Actions]
+- New src/stack_projection.py: project_stack(get_frame, n, pixel_um, method="focus"|"mip"|"best").
+  "focus" = Laplacian-pyramid focus stacking (Burt & Adelson 1985), selection by local band
+  energy with averaging where no frame stands out (Burt & Kolczynski 1993), coarsest remainder =
+  min over frames (removes flare), clamp at the per-pixel darkest frame. Streams frames.
+  Tried first: a per-pixel focus-gated MIP (rings from real out-of-plane structures on the halo)
+  and frame drift correction by phase correlation (false shifts of 10-60 px; removed).
+  Survey: 467 videos >1 MB; most have constant per-frame translation (no z recorded); a few Rig2
+  2022.12.15 stacks have irregular, reversing z.
+  Measured (halo ring 15-35 um from soma, % of soma; MIP -> focus): 15.0->7.9, 29.2->15.4,
+  41.3->38.5; noise similar (20.5->19.5, 26.6->31.0, 1.8->2.8).
+- acq4_mosaic.py: videos use project_stack (--video-projection focus|mip|best); Tile carries
+  index_info, index_mag/pixel, stage_xmin/ymax; Tile.mosaic_user_transform() and
+  corrected_transform(); report tiles get "corrected" and "index" (json_safe);
+  SliceMosaic.save_mosaic_file() writes <name>~aligned.mosaic (MosaicEditor_save 2.0; rootPath =
+  slice dir; inferred cells named "cell_nnn (inferred)"; Markers/Ruler items copied);
+  save_projections() writes float32 TIFFs; groups that cannot be placed are stitched within
+  themselves (placement "stage+stitched"); cell figures show video projections first (sqrt
+  scale, up to 4 panels); annotated cell markers magenta (were white). Numpy docstrings on all
+  61 functions/classes; module docstring updated.
+- Checked: .mosaic footprints recomputed as acq4 does (.index transform, then item
+  userTransform) match the report bounds within 0.005 um (35 images).
+- Found: in real .mosaic files the item userTransform equals the .index userTransform (36/36);
+  acq4 REPLACES one with the other, but ephys cn_atlas/mosaic/reader.py ADDS both -> double
+  offset where a manual correction exists (e.g. DCN 2024.09.17 S1, ~(-928,+646) um). Not changed
+  (other project).
+- Exposure and intensity statistics do not separate dye-fill videos from brightfield; cell-folder
+  videos stay labelled BF (asked the user).
+- Docstrings (numpy) in acq4_reader.py (45), acq4_to_nwb.py (28; Args -> Parameters), browse_nwb
+  (16), display_nwb (13), display_acq4 (5), imageinfo (4). tifffile.py (vendored) not touched;
+  tutorial_test.py has no functions. imageinfo.py does not import (nwbinspector.inspect_nwb no
+  longer exists) - not fixed.
+- Sphinx: docs/conf.py, index.rst, usage/{installation,conversion,viewing,mosaics,video_stacks}.md,
+  "registration methods.md", api/*.rst; uv add --dev myst-parser; docs/_build/ in .gitignore.
+  Build: uv run sphinx-build -b html docs docs/_build/html (only warnings: the original
+  acq4_to_nwb module docstring layout).
+- Examples: mosaic_test/2026-11-11/ (7 slices). Tests: 48 passed.
+- Still open: 250 um move cap not implemented (examples include Rig4 2022.12.15 s0 cell_003 10x
+  (-1490, +126) um NCC 0.79, and Rig4 2021.05.04 s2 cell_003 +363 um).
+
+--------------------------------------------------------------------------------
+CLAUDE
+--------------------------------------------------------------------------------
+(See the chat reply for round 15.)
+
+================================================================================
+USER (16)
+================================================================================
+On all PNGs: top left repo name, version, git hash (8 pt); bottom right processing date/time.
+Always label the cell number in the mosaic (also the current cell). No ";" in plot text; explain
+the magenta circles and crosses. Crosses missing on adjacent images (Rig4 2022.12.15 s0 cell_003).
+Right-hand images in image-number order, wrapped in 2 columns (3-4 images) or 3 (more). Left
+panel 1500 um instead of 800, configurable per dataset (cortex ~2 mm, CN 1200-1500).
+BF vs fluorescence: description of fluorescence (few bright compact features on darker
+background; lysosomal spots 1-3 um from retrograde tracer; filled somata 8-40 um, processes
+<=5 um; several fills per field) and BF (oblique gradient, granular); develop a heuristic, with
+user labels, BF / fluorescence / ambiguous. (Mid-turn:) bulk runs should produce tables (excel,
+one sheet per exception) of annotation mismatches, ambiguous/mixed image kinds and refused
+matches, with a column for the user's decision (BF/Fluor/mixed; manual mosaic for refused
+matches; images may need refusing: experimenter error, illumination off, slice moved).
+
+[Actions]
+- Cause of the missing crosses: cell_003 10x group moved (-1490, +126) um (> 250 um), so the cell
+  position was outside the images. Implemented the 250 um cap (max_move_um): refused moves are
+  logged, noted, reported (refused_move_um, refused_ncc) and the group stays at stage.
+- Figures: provenance() stamp top left ("dandi_acq4 0.2.0, git 64bf21f + uncommitted changes"),
+  "processed <date time>" bottom right, on mosaic, QC and cell figures. Cell figure rewritten:
+  default 1500 um (--cell-region-um, or mosaic_cell_region_um via --dataset/--config), every
+  cell labelled (this cell bold), 3-line legend explaining magenta circle/+ and blue square/x
+  and the boxes, right panels = the cell's images above the slice magnification in
+  file-number order (images, then videos), 1/2/3 columns, up to 12; when the cell is outside an
+  image the panel states distance and direction. No ";" in plot text.
+- src/image_kind.py: measure() (tail ratio relative to local background and raw, bright area,
+  number/size of bright features, dark area, gradient, texture spread), classify() (hand rule:
+  first guess), review page builder (python -m src.image_kind ... -> review.html with
+  thumbnails and BF/fluorescence/mixed/unsure buttons, CSV download; measurements.csv).
+  mosaic_test/image_kind/: 160 images from 16 slices. Finding: the gradient also occurs in
+  fluorescence (vignetting); after normalising by local background the hand rule calls most
+  images ambiguous -> needs the user's labels.
+- src/mosaic_exceptions.py: exceptions workbook (README, image kind with thumbnails, refused
+  matches, annotation mismatches; decision drop-downs) written per run; Decisions read back with
+  --decisions (image kind: BF/fluorescence/green/red/yellow/mixed/exclude; refused:
+  stage/accept/exclude/manual; annotation: annotation/inferred/exclude); decided rows stay
+  listed. Round trip tested on 3 slices (accept, exclude, manual, inferred, yellow all applied).
+- Found: DCN 2021.04.27 s0 cell_002 annotation is 251 um right of its images, matching the
+  manual .index correction of cell_002 (+235.6, +65.5) um, which this program does not use.
+- openpyxl added (runtime). Docs: mosaics page updated, API pages for image_kind and
+  mosaic_exceptions; build clean except the original acq4_to_nwb module docstring.
+
+--------------------------------------------------------------------------------
+CLAUDE
+--------------------------------------------------------------------------------
+(See the chat reply for round 16.)
+
+================================================================================
+USER (17)
+================================================================================
+Labelled the 160 images (image_labels/image_kind_labels.csv). Keep the labelling tool. Outline
+orange when not yet labelled, blue when labelled. Larger radio buttons.
+
+[Actions]
+- Labels: 126 fluorescence, 15 BF, 8 mixed, 11 unsure. At >=10x most images outside
+  fluorescence folders are fluorescence (cell folders 42/53, slice level 39/53).
+- Old measurements did not separate BF from fluorescence (LOO: best was 15 errors = calling
+  everything fluorescence). New relief measurements (band-pass skewness in structured areas,
+  depth of dark vs bright excursions) do: AUC 0.92 / 0.91.
+- image_kind: Appearance.structured_skew, dark_excursion; classify() = logistic model
+  (tail_ratio, structured_skew, dark_excursion, gradient; ambiguous band p 0.3-0.8) saved in
+  src/image_kind_model.json (package data); fit() + CLI "fit"; "review" subcommand with
+  --labels. LOO on 141: fluorescence 117 F / 9 ambiguous / 0 BF; BF 7 BF / 7 ambiguous / 1 F
+  (Rig4 2021.05.04 s2 FITC/image_020.tif, p=1.0: asked the user to recheck the label).
+- Review page: orange outline until labelled, blue after; 22 px radio buttons in large click
+  targets; "Next unlabelled"; "Load labels (CSV)"; labels keyed by path (survive rebuilds),
+  page rebuilt with the user's labels pre-set.
+- acq4_mosaic: appearance carries p_fluorescence; workbook shows p(fluorescence) and the relief
+  measurements. Docs updated.
+
+--------------------------------------------------------------------------------
+CLAUDE
+--------------------------------------------------------------------------------
+(See the chat reply for round 17.)
+
+================================================================================
+USER (18)
+================================================================================
+Add a "skip image" category (noise; not part of training; red X across the image). Then a new
+labelling round with at least 2x the images (more brightfield), the current set with its labels
+plus novel ones; then re-run the categorization tests.
+
+[Actions]
+- Review page: "skip" button; skipped cards show a red X over the thumbnail; fit() counts skip
+  but trains only on BF/fluorescence.
+- build_review: includes every labelled image (with its label), plus --new N novel images from
+  a measured pool (3x N, round-robin by folder type, at most 1/4 videos); --low-p-fraction of
+  them are the lowest p(fluorescence) (to find BF), the rest random; shown shuffled.
+- Fixed a crash in measure() for featureless images (empty structured area) - it had stopped
+  the example re-run at Rig4 2021.05.04 s2.
+- Page 2: mosaic_test/image_kind_2/review.html: 160 labelled + 200 new (100 lowest p, 100
+  random) from 16 old + 24 new slices (8 per dataset, random_cells seed 21).
+- (User: "The file opens but shows no images.") Cause: the rewritten page template was inserted
+  as raw text into a normal (non-raw) Python string, so "\n" in the JS became real line breaks
+  -> JS syntax error, nothing rendered. Fixed (_page = r"""...""") and re-wrapped both existing
+  pages from their embedded data. Checked with JavaScriptCore (osascript -l JavaScript): syntax
+  ok; with a stub DOM the script renders 360 cards, 160 labelled.
+
+================================================================================
+USER (19)
+================================================================================
+Classification done (the GUI changes made it less effort); labels saved in
+mosaic_test/image_kind_2/image_kind_labels.csv.
+
+[Actions]
+- Labels: 360 (239 F, 50 BF, 33 mixed, 26 skip, 12 unsure); 6 round-1 labels changed.
+  Copied to image_labels/image_kind_labels_round2.csv (mosaic_test is gitignored).
+- Out-of-sample test of the round-1 model on the 200 new images: of 100 called F, 0 BF (89 F,
+  9 mixed, 1 unsure, 1 skip); of 20 called BF, 12 BF, 4 F; the 80 ambiguous held 25 BF, 20 skip.
+- Refit, validated BY SLICE (GroupKFold, 10 groups, mean of 5 divisions; 37 slices) - leave-one-
+  out flatters because images of one slice resemble each other. Logistic (4 features) found
+  19/50 BF by slice; logistic (10 features): F->BF 5.2, BF found 32.4, BF->F 6.8, ambiguous 28;
+  random forest (10 features, 400 trees, leaf>=3): F->BF 1.0, BF found 30.8, BF->F 2.4,
+  ambiguous ~40. Chose the forest (fewer silent errors; ambiguous go to the workbook).
+  Importance: structured_skew .29, dark_excursion .20, tail_ratio .12, gradient .11.
+- fit(): method forest|logistic, by-slice validation, "disagreements" list; forest pickled in
+  src/image_kind_forest.pkl (package data). Bug fixed during this: slice grouping first used
+  subfolders (64 "slices"), so images of a slice could be on both sides; now first 3 path parts.
+- Disagreements (wrong in most divisions): Rig4 2021.05.04 s2 FITC/image_020 (labelled BF; looks
+  fluorescent to me - visual impression), Rig4 2022.11.22 s1 image_000 (labelled F; unclear to
+  me), DCN 2025.02.06 s0 image_005 (labelled BF; relief texture, looks BF to me). Sheet:
+  mosaic_test/image_kind_2/label_disagreements.png.
+- Where non-training labels land: skip 20/26 ambiguous; mixed 23/33 fluorescence; unsure 11/12
+  ambiguous.
+- Docs updated with these numbers.
+
+================================================================================
+USER (20)
+================================================================================
+Showed the ambiguous cases (mosaic_test/image_kind_2/ambiguous.html: 79, sorted by p, labels
+editable). User relabelled edge cases (image_kind_labels_2.csv: 18 changes; more skip and
+mixed). Mixed is real: fluorescence taken with room lights on, or both illumination paths on at
+uncontrolled levels. Refine the model, evaluate, make it the default; first a plot of the
+distributions (one plot, colour by label).
+
+[Actions]
+- Merged labels -> image_labels/image_kind_labels_round3.csv (234 F, 49 BF, 42 mixed, 33 skip,
+  2 unsure).
+- Compared (by slice): binary forest vs three-class (BF/F/mixed). Three-class could not find
+  mixed (best 9/42) and made more BF/F errors -> kept binary; mixed -> 21 F, 17 ambiguous, 4 BF.
+- Final model (round 3): F 214 / 19 amb / 1 BF; BF 33 / 13.4 amb / 2.6 F (mean of 5 divisions,
+  37 slices). Same 3 disagreements as before.
+- Plot: mosaic_test/image_kind_2/p_fluorescence_distributions.png (overlaid histograms of
+  p(fluorescence) by label, ambiguous band shaded, axis cut at 40 with the cut bar labelled;
+  by-slice p for BF/F, final-model p for mixed/skip).
+- Default: confident verdicts (10x and above) override the folder name (F -> yellow, BF -> BF;
+  channel_from "appearance"); --no-auto-kind to turn off; decisions override. New workbook sheet
+  "image kind (automatic)"; both image-kind sheets share decisions. Test on 2 slices: 7 image
+  kind (ambiguous), 31 set automatically. Docs updated. Examples being regenerated.

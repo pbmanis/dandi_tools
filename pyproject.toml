@@ -32,6 +32,7 @@ dependencies = [
     "numpy>=2.2",
     "nwbinspector==0.7.1",
     "obspy==1.4.2",
+    "openpyxl>=3.1.5",
     "pandas>=2.2.3",
     "pint>=0.24.2",
     "pyabf",
@@ -78,6 +79,7 @@ dev = [
     "isort>=5.13.2",
     "jupyterlab>=3.2.0",
     "mypy>=1.13",
+    "myst-parser>=5.2.0",
     "nbconvert",
     "pandoc",
     "pytest>=9.0.3",
@@ -87,6 +89,9 @@ dev = [
 
 [tool.setuptools]
 packages = ["src"]
+
+[tool.setuptools.package-data]
+src = ["image_kind_model.json", "image_kind_forest.pkl"]
 
 [tool.uv.sources]
 # ephys = { git = "https://github.com/pbmanis/ephys.git", branch="main" }
