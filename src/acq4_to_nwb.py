@@ -207,9 +207,21 @@ default_config_file = Path(project_root, "config", "dandi_configuration.cfg")
 def read_config(config_file: Union[str, Path, None] = None) -> dict:
     """Read the dataset configuration file (pyqtgraph configfile format)
 
-    Args:
-        config_file: the configuration file. Defaults to config/dandi_configuration.cfg
-            in the project directory.
+    Parameters
+    ----------
+    config_file : str or pathlib.Path, optional
+        the configuration file. Defaults to config/dandi_configuration.cfg
+        in the project directory.
+
+    Returns
+    -------
+    dict
+        Dataset name -> its settings (see config/dandi_example_configuration.cfg).
+
+    Raises
+    ------
+    FileNotFoundError
+        If the file does not exist.
     """
     config_file = Path(config_file) if config_file is not None else default_config_file
     if not config_file.is_file():
@@ -240,13 +252,24 @@ def parse_age(agestr):
         Approximate ages (P150ish, P23?) are not valid ISO 8601, so the qualifier
         is returned separately and the ISO age is given without it.
 
-    Params:
-        agestr (str): age string from the file
+    Parameters
+    ----------
+    agestr : str
+        age string from the file
 
-    Returns:
-        tuple: (ISO 8601 age string, or None if no age was given,
-                age in days, or None if the age is not exact,
-                list of qualifiers: "lower bound", "approximate")
+    Returns
+    -------
+    iso_age : str or None
+        ISO 8601 age string, or None if no age was given
+    age_days : float or None
+        age in days, or None if the age is not exact
+    qualifiers : list of str
+        list of qualifiers: "lower bound", "approximate"
+
+    Raises
+    ------
+    ValueError
+        If the age string is not in a recognized format.
     """
     if agestr is None or str(agestr).strip() == "":
         return None, None, []
@@ -268,12 +291,34 @@ def parse_age(agestr):
 
 
 def ISO8601_age(agestr):
-    """Convert free-form age designators to an ISO 8601 duration (see parse_age)"""
+    """Convert free-form age designators to an ISO 8601 duration (see parse_age)
+
+    Parameters
+    ----------
+    agestr : str
+        age string from the file
+
+    Returns
+    -------
+    str or None
+        The ISO 8601 age.
+    """
     return parse_age(agestr)[0]
 
 
 def sex_code(sex):
-    """Map free-form sex designators to the NWB/DANDI codes M, F, O or U"""
+    """Map free-form sex designators to the NWB/DANDI codes M, F, O or U
+
+    Parameters
+    ----------
+    sex : str or None
+        The sex as written in the data (only the first letter is used).
+
+    Returns
+    -------
+    str
+        "M", "F", "O" or "U" (unknown, also for anything unrecognized).
+    """
     sex = str(sex).strip().upper() if sex is not None else ""
     if sex[:1] in ["M", "F", "O", "U"]:
         return sex[:1]
@@ -286,7 +331,18 @@ re_weight = re.compile(r"^\s*(?P<value>\d+\.?\d*)\s*(?P<unit>kg|grams|g)?", re.I
 def weight_with_units(weight):
     """Convert free-form weight designators to a standard format, e.g.:
         20 g, 20g, 20 grams, 0.02 kg, 20 -> "20.0 g"
+
     Returns None if the weight is missing, zero (not measured), or cannot be interpreted.
+
+    Parameters
+    ----------
+    weight : str, int or float
+        The weight as written in the data.
+
+    Returns
+    -------
+    str or None
+        The weight in grams, e.g. "20.0 g".
     """
     if isinstance(weight, (int, float)):
         value = float(weight)
@@ -318,19 +374,45 @@ known_protocols = {
 
 
 def protocol_type(protocol: str):
-    """Return (recording mode, series description, stimulus type) for a known protocol, or None"""
+    """Return (recording mode, series description, stimulus type) for a known protocol, or None
+
+    Parameters
+    ----------
+    protocol : str
+        The acq4 protocol name; it is matched by prefix against ``known_protocols``.
+
+    Returns
+    -------
+    tuple of str or None
+        (recording mode "CC" or "VC", series description, stimulus type).
+    """
     for prefix, ptype in known_protocols.items():
         if protocol.startswith(prefix):
             return ptype
     return None
 
 def def_lister():
+    """Default factory for list fields of :class:`ExperimentInfo`.
+
+    Returns
+    -------
+    list
+        A new empty list.
+    """
     return []
 
 
 @dataclass
 class ExperimentInfo:
-    """Data class to hold the metadata for the experiment."""
+    """Data class to hold the metadata for the experiment.
+
+    Attributes
+    ----------
+    description, protocol, time, lab, institution, experiment_description, sessionid, notes, subject : str
+        Session metadata.
+    experimenters : list of str
+        The experimenters.
+    """
 
     description: str = ""
     protocol: str = ""
@@ -345,6 +427,19 @@ class ExperimentInfo:
 
 
 class ACQ4toNWB:
+    """Convert the recordings of acq4 cell directories to NWB files (one file per cell).
+
+    See the module docstring for how the acq4 directory structure maps to the NWB icephys tables.
+
+    Parameters
+    ----------
+    output_path : str or pathlib.Path, optional
+        Directory for the NWB files.
+    overwrite : bool, optional
+        Replace existing NWB files (default False: skip cells that have one).
+    testmode : bool, optional
+        Read the data and metadata, but do not write files (default False).
+    """
     def __init__(
         self,
         output_path: Union[str, Path, None] = None,
@@ -354,8 +449,14 @@ class ACQ4toNWB:
         """Convert a file from ACQ4 (www.acq4.org) format to NWB format (www.nwb.org)
         See the documentation above for the mapping between these formats.
 
-        Args:
-            out_file_path (Union[str, Path, None], optional): The path to the output files. Defaults to None.
+        Parameters
+        ----------
+        output_path : str or pathlib.Path, optional
+            The path to the output files. Defaults to None.
+        overwrite : bool, optional
+            Replace existing NWB files (default False).
+        testmode : bool, optional
+            Do not write files (default False).
         """
         self.AR = acq4_reader()  # get acq4 reader from the ephys package.
 
@@ -383,11 +484,14 @@ class ACQ4toNWB:
                 cell number 0
             ... etc.
 
+        Parameters
+        ----------
+        f : str or pathlib.Path
+            Full file path.
 
-        Args:
-            f (Union[str, Path], optional): Full file path.
-
-        Returns:
+        Returns
+        -------
+        tuple of str
             slicen, cell (string represtations of partial path values)
         """
         f = Path(f)
@@ -405,20 +509,25 @@ class ACQ4toNWB:
         expt_id: Union[str, None] = None,
         rig_id: Union[str, None] = None,
     ):
-        """
-        Convert a data path of this format (used by acq4):
+        """Convert a data path of this format (used by acq4):
         f = Path('/Volumes/Pegasus/all/the/leading/pathnames/2017.05.01_000/slice_000/cell_000')
         To:
         2017.05.01~S0C0 ("short form")
 
-         Args:
-            f (Union[str, Path], optional): Full file path.
-            expt_id: str or None: an experiment label to put in the filename.
-                ignored if None
-            rig_id: str or None: a rig label to put in the filename
-                ignored if None
+        Parameters
+        ----------
+        f : str or pathlib.Path
+            Full file path.
+        expt_id : str or None
+            an experiment label to put in the filename.
+            ignored if None
+        rig_id : str or None
+            a rig label to put in the filename
+            ignored if None
 
-        Returns:
+        Returns
+        -------
+        str
             short path name string
         """
         if f is None:
@@ -442,12 +551,13 @@ class ACQ4toNWB:
         may also hold the stimulus files. It also has some associated metadata,
         in the .index file that is associated with the .ma file.
 
-
         The amplifier device in acq4 (e.g., "MultiClamp1") is the file name without
         the extension, and the trailing number is the amplifier channel (electrode).
 
-        Args:
-            amplifier_name (str): name of the amplifier data file, e.g. "MultiClamp1.ma"
+        Parameters
+        ----------
+        amplifier_name : str
+            name of the amplifier data file, e.g. "MultiClamp1.ma"
         """
         self.AR.setDataName(amplifier_name)
         amp_match = re.match(r"^(?P<prefix>.*?)(?P<channel>\d+)$", Path(amplifier_name).stem)
@@ -465,15 +575,15 @@ class ACQ4toNWB:
 
         Parameters
         ----------
-        sourcepath : Union[str, Path]
+        sourcepath : str or pathlib.Path
             The full path
-        name : Union[str, None], optional
+        name : str or None, optional
             The string to search for in the path, by default None
 
         Returns
         -------
-        _type_
-            str: the name found in the path
+        str
+            the name found in the path
 
         Raises
         ------
@@ -506,14 +616,29 @@ class ACQ4toNWB:
         The NWB file will contain all of the recordings from ONE cell.
         The recording mode (CC or VC) of each protocol is read from the acq4 data.
 
-        Args:
-            path_to_cell (string or Path): Full path and name of the cell directory
-            outfilename (Union[Path, str, None], optional): NWB output filename. Defaults to None.
+        Parameters
+        ----------
+        experiment_name : str
+            The dataset name (a top-level entry in the configuration file).
+        path_to_cell : str or pathlib.Path
+            Full path and name of the cell directory
+        protocols : list of str
+            The protocol directories to convert.
+        output_path : str or pathlib.Path, optional
+            Directory for the NWB file.
+        outfilename : str or pathlib.Path, optional
+            NWB output filename. Defaults to None (made from the path).
+        appendmode : bool, optional
+            Not used (default False).
+        dataset : dict, optional
+            The dataset's settings from the configuration file (keywords, experimenters, grants,
+            device, light-source powers, ...).
 
-        Returns:
-            None or outputfilename
-                None indicates failure to read the data.
-                an outputfile indicates conversion success.
+        Returns
+        -------
+        pathlib.Path or None
+            None indicates failure to read the data.
+            an outputfile indicates conversion success.
         """
         keywords = dataset.get("keywords", None)
         experimenters = dataset.get("experimenters", None)
@@ -735,15 +860,39 @@ class ACQ4toNWB:
         """Make NWB intracellular electrophysiology tables from a
         single acq4 current clamp or voltage clamp protocol
 
-        Args:
-            recording_mode: (str): Either CC or VC for current or voltage clamp
-            series_description (str): Name for this  series
-            stimulus_type (str): stimulus type for the sequential recordings table
-            path_to_cell (Path): full path of the data, from which the protocol is pulled
-            info (dict): acq4 "info" block provided with this protocol
-            device (NWB.device): NWB device structure
-            acq4_source_name (str, optional): name of device in acq4. Defaults to "MultiClamp1.ma".
-            electrode (int, optional): # of recording electrode. Defaults to 1.
+        Each sweep becomes a stimulus and a response series and a row of the intracellular
+        recordings and simultaneous recordings tables; the sweeps together are one sequential
+        recording, grouped with the repeats of the same protocol. Optical stimulation, if any, is
+        added for each sweep.
+
+        Parameters
+        ----------
+        recording_mode : str
+            Either CC or VC for current or voltage clamp
+        series_description : str
+            Name for this  series
+        path_to_cell : pathlib.Path
+            full path of the data, from which the protocol is pulled
+        protocol : str
+            The protocol directory name.
+        info : dict
+            acq4 "info" block provided with this protocol
+        device : pynwb.device.Device
+            NWB device structure
+        acq4_source_name : str, optional
+            name of device in acq4. Defaults to "MultiClamp1.ma".
+        electrode : int, optional
+            # of recording electrode. Defaults to 1.
+        protonum : int, optional
+            Number of the protocol in the cell (default 0).
+        stimulus_type : str, optional
+            stimulus type for the sequential recordings table
+
+        Returns
+        -------
+        None
+            The recordings are added to ``self.NWBFile``; None is also returned early if the data
+            cannot be read.
         """
 
         match recording_mode:
@@ -929,14 +1078,24 @@ class ACQ4toNWB:
 
         This adds the protocol information directly to the self.NWBFile object.
 
-        Args:
-            path_to_cell: Path, : full path to the cell
-            protocol: str : protocol name
-            proto_index: dict : acq4 index for the protocol directory
-            info: dict, : acq4 metadata dictionary
-            device: NWB.device
-        Returns:
-            Nothing
+        Parameters
+        ----------
+        path_to_cell : pathlib.Path
+            full path to the cell
+        protocol : str
+            protocol name
+        proto_index : dict
+            acq4 index for the protocol directory
+        info : dict
+            acq4 metadata dictionary
+        device : pynwb.device.Device
+            The amplifier device.
+        protonum : int, optional
+            Number of the protocol in the cell (default 0).
+
+        Returns
+        -------
+        None
         """
         ptype = protocol_type(protocol)
         if ptype is None:
@@ -991,8 +1150,15 @@ class ACQ4toNWB:
                 The power is not calibrated, and assumes a linear relation between command
                 and power.
 
-        Returns:
-            dict: one entry per light source used in this protocol ("laser", "LED"),
+        Parameters
+        ----------
+        protocol : str
+            The protocol name.
+
+        Returns
+        -------
+        dict
+            one entry per light source used in this protocol ("laser", "LED"),
             holding the per-sweep waveforms and the scaling information.
         """
         optical = {}
@@ -1060,12 +1226,18 @@ class ACQ4toNWB:
     ):
         """Add the optical stimulation for one sweep to the NWB file
 
-        Args:
-            optical (dict): light source information from read_optical_stimulation
-            protocol (str): protocol name
-            sweepno (int): sweep number (row in the data array)
-            dir_index (int): index of the acq4 sweep directory for this sweep
-            starting_time (float): start of the sweep relative to the session start
+        Parameters
+        ----------
+        optical : dict
+            light source information from read_optical_stimulation
+        protocol : str
+            protocol name
+        sweepno : int
+            sweep number (row in the data array)
+        dir_index : int
+            index of the acq4 sweep directory for this sweep
+        starting_time : float
+            start of the sweep relative to the session start
         """
         for source, light in optical.items():
             if source == "laser":
@@ -1116,10 +1288,15 @@ def validate(testpath, nwbfile):
 
     Parameters
     ----------
-    testpath : path to the data file on disk
-        _description_
-    nwbfile : nwb structure in memory
-        _description_
+    testpath : str or pathlib.Path
+        path to the data file on disk
+    nwbfile : pynwb.NWBFile
+        nwb structure in memory
+
+    Raises
+    ------
+    AssertionError
+        If the intracellular recordings or the experimental conditions differ.
     """
     with NWBHDF5IO(path=testpath, mode="r") as io:
         infile = io.read()
@@ -1218,6 +1395,32 @@ def ConvertFile(
     testmode: bool = False,
 ):
     # experiment_name = None
+    """Convert one cell directory to an NWB file.
+
+    Parameters
+    ----------
+    experiment_name : str
+        The dataset name.
+    filename : str or pathlib.Path
+        The cell directory.
+    protocols : list of str
+        The protocols to convert.
+    appendmode : bool, optional
+        Not used (default False).
+    output_path : str or pathlib.Path
+        Directory for the NWB file (required).
+    dataset : dict
+        The dataset's settings from the configuration file (``device`` names the amplifier).
+    overwrite : bool, optional
+        Replace an existing NWB file (default False).
+    testmode : bool, optional
+        Do not write the file (default False).
+
+    Returns
+    -------
+    pathlib.Path or None
+        The NWB file written, or None.
+    """
     assert output_path is not None
     A2N = ACQ4toNWB(output_path=output_path, overwrite=overwrite, testmode=testmode)
     A2N.set_amplifier_name(dataset['device'])
@@ -1234,7 +1437,18 @@ def ConvertFile(
 
 
 def select(protocols: list):
-    """Keep the protocols that can be converted (see known_protocols)"""
+    """Keep the protocols that can be converted (see known_protocols)
+
+    Parameters
+    ----------
+    protocols : list of str
+        Protocol names.
+
+    Returns
+    -------
+    list of str
+        The protocols of known types; the others are listed on the console.
+    """
     ok_prots = [p for p in protocols if protocol_type(p) is not None]
     skipped = [p for p in protocols if protocol_type(p) is None]
     if len(skipped) > 0:
@@ -1255,8 +1469,36 @@ def cvt(
 ):
     """Do the file conversion for each complete data set in a given database row
 
-    Args:
-        row (Pandas row (series)): A row containing information about the day
+    The protocols are those in the row's "data_complete" column that are of known types, less
+    those excluded for the slice or the cell.
+
+    Parameters
+    ----------
+    row : pandas.Series
+        A row containing information about the day (one cell)
+    experiment_name : str
+        The dataset name.
+    output_path : str or pathlib.Path, optional
+        Directory for the NWB files.
+    dataset : dict, optional
+        The dataset's settings from the configuration file.
+    exclusions : dict, optional
+        "day/slice" or "day/slice/cell" -> {"protocols": [...]} ("all" excludes everything).
+    rigs : tuple or list of str, optional
+        Convert only data recorded on these rigs (a rig is a directory in the data path).
+    row_num : int, optional
+        Row number, for messages.
+    overwrite : bool, optional
+        Replace existing NWB files (default False).
+    testmode : bool, optional
+        Do not write files (default False).
+
+    Returns
+    -------
+    nwbfile : pathlib.Path or None
+        The NWB file written.
+    filename : pathlib.Path or None
+        The cell directory.
     """
 
     path = row.data_directory
@@ -1323,6 +1565,30 @@ def convert_dataset(
     Each row of the database corresponds to one cell.
     The column "data_complete" holds the list of protocols that were completed and are
     potentially suitable for further analysis.
+
+    Parameters
+    ----------
+    output_path : str or pathlib.Path
+        Directory for the NWB files.
+    experiment_name : str
+        The dataset name.
+    dataset : dict
+        The dataset's settings from the configuration file.
+    experiment_config : dict
+        The experiment's entry in the ephys experiments file.
+    exclusions : dict
+        Protocols to leave out, by slice or cell (see :func:`cvt`).
+    overwrite : bool, optional
+        Replace existing NWB files (default False).
+    testmode : bool, optional
+        Do not write files (default False).
+    rigs : tuple or list of str, optional
+        Convert only data recorded on these rigs.
+
+    Returns
+    -------
+    list of pathlib.Path
+        The NWB files written.
     """
     import pandas as pd
 
@@ -1362,8 +1628,15 @@ def check_conversion(nwbf):
     (as for "nwbinspector <file> --config dandi").
     The file is reported as OK if there are only best practice suggestions.
 
-    Returns:
-        bool: True if the file is OK
+    Parameters
+    ----------
+    nwbf : str or pathlib.Path
+        The NWB file.
+
+    Returns
+    -------
+    bool
+        True if the file is OK
     """
     try:
         results = list(inspect_nwbfile(nwbfile_path=nwbf, config=load_config("dandi")))
@@ -1382,7 +1655,13 @@ def check_conversion(nwbf):
 
 
 def check_conversions(output_path: Union[str, Path]):
-    """Run nwbinspector on every NWB file in the output directory for a dataset"""
+    """Run nwbinspector on every NWB file in the output directory for a dataset
+
+    Parameters
+    ----------
+    output_path : str or pathlib.Path
+        The directory of NWB files.
+    """
     output_path = Path(output_path)
     print("=" * 80)
     print(f"Checking conversions in: {output_path!s}")
@@ -1402,13 +1681,19 @@ def upload_to_dandi(output_path: Path, dandi_path: Path, dataset_id: str):
     Each step must succeed before the next is run.
     The final "dandi upload" is left to be run by hand (see README.md).
 
-    Args:
-        output_path (Path): directory holding the converted NWB files
-        dandi_path (Path): directory in which the dandiset directory is created
-        dataset_id (str): the DANDI dataset id (e.g. "001423")
+    Parameters
+    ----------
+    output_path : pathlib.Path
+        directory holding the converted NWB files
+    dandi_path : pathlib.Path
+        directory in which the dandiset directory is created
+    dataset_id : str
+        the DANDI dataset id (e.g. "001423")
 
-    Returns:
-        bool: True if all steps succeeded
+    Returns
+    -------
+    bool
+        True if all steps succeeded
     """
     import subprocess
 
@@ -1443,6 +1728,12 @@ def upload_to_dandi(output_path: Path, dandi_path: Path, dataset_id: str):
 
 def main():
 
+    """Command line entry point (``acq4_to_nwb <dataset> [-c] [-o] [-v] [-s file] [-u] [-t]``).
+
+    Reads the dataset's entry in the configuration file and the ephys experiments file it names,
+    then converts (-c), verifies with nwbinspector (-v, or -s for one file) and prepares the upload
+    (-u), as requested. See ``acq4_to_nwb --help``.
+    """
     parser = argparse.ArgumentParser(
         description="Convert acq4 data to NWB format",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,

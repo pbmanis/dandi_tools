@@ -1,0 +1,91 @@
+{
+ "method": "forest",
+ "features": [
+  "tail_ratio",
+  "raw_tail_ratio",
+  "bright_area",
+  "n_bright",
+  "largest_bright_um2",
+  "dark_area",
+  "gradient",
+  "texture_spread",
+  "structured_skew",
+  "dark_excursion"
+ ],
+ "log": [
+  true,
+  true,
+  true,
+  false,
+  true,
+  false,
+  false,
+  false,
+  false,
+  true
+ ],
+ "mean": [
+  0.09717165776864378,
+  0.607123550499469,
+  -4.60762873197752,
+  10.162544169611307,
+  5.3109260584547515,
+  0.12269505300353353,
+  0.6070954063604239,
+  0.21219293286219074,
+  0.30688657243816264,
+  -0.7850398864409667
+ ],
+ "scale": [
+  0.6938188256996108,
+  0.736754809602405,
+  1.0752356069165268,
+  19.931199947228166,
+  1.1737325431893793,
+  0.1360143379091704,
+  0.27818508496742433,
+  0.12903986271356935,
+  0.18824143441040767,
+  0.5652722022271741
+ ],
+ "zone": [
+  0.3,
+  0.8
+ ],
+ "fitted": "2026-11-11 11:35",
+ "labels": "image_labels/image_kind_labels_round3.csv",
+ "trained_on": {
+  "fluorescence": 234,
+  "BF": 49,
+  "mixed": 42,
+  "unsure": 2,
+  "skip": 33
+ },
+ "slices": 37,
+ "validation": {
+  "method": "by slice: 10 groups of slices, mean of 5 random divisions",
+  "fluorescence called fluorescence": 214.0,
+  "fluorescence called ambiguous": 19.0,
+  "fluorescence called BF": 1.0,
+  "BF called BF": 33.0,
+  "BF called ambiguous": 13.4,
+  "BF called fluorescence": 2.6
+ },
+ "disagreements": [
+  {
+   "path": "Rig4/2021.05.04_000/slice_002/FITC/image_020.tif",
+   "label": "BF",
+   "times_wrong": 5
+  },
+  {
+   "path": "Rig4/2022.11.22_000/slice_001/image_000.tif",
+   "label": "fluorescence",
+   "times_wrong": 5
+  },
+  {
+   "path": "DCN_IC_inj/2025.02.06_000/slice_000/image_005.tif",
+   "label": "BF",
+   "times_wrong": 4
+  }
+ ]
+}

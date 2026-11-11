@@ -40,6 +40,16 @@ def parse_location(location: str):
     """Get the x, y position (microns) from an OptogeneticStimulusSite location, e.g.
     "x=102554 um, y=7769 um (scanner coordinates)", or from older files,
     "(np.int32(102554), np.int32(7769))" or "[0, 0]"
+
+    Parameters
+    ----------
+    location : str
+        The location string.
+
+    Returns
+    -------
+    numpy.ndarray
+        [x, y] in microns.
     """
     numbers = re.findall(r"-?\d+\.?\d*", location.replace("np.int32", ""))
     return np.array([float(numbers[0]), float(numbers[1])])
@@ -47,6 +57,39 @@ def parse_location(location: str):
 
 @dataclass()
 class acq4_data:  # dataclass to hold the data from a single acq4 protocol
+    """The data of one acq4 protocol read from an NWB file (all of its sweeps).
+
+    Attributes
+    ----------
+    nwb_name : str
+        Name of the first acquisition series of the protocol.
+    protocol : str
+        Name of the acq4 protocol.
+    mode : str
+        Recording mode ("CC"/"IC" or "VC").
+    nsweeps : int
+        Number of sweeps.
+    sample_rate : float
+        Sample rate (Hz).
+    start_time : float
+        Start of the first sweep, relative to the session start (s).
+    response : numpy.ndarray
+        Responses, (sweeps, samples).
+    command : numpy.ndarray
+        Electrical commands, (sweeps, samples) (zeros where there is none).
+    ostim : numpy.ndarray or None
+        Optical stimulus waveforms, (sweeps, samples).
+    ostim_timebase : numpy.ndarray or None
+        Their time bases (s).
+    optospots : numpy.ndarray or None
+        Stimulus positions, (sweeps, 2), microns.
+    ospot_size : float
+        Optical spot size (m).
+    timebase : numpy.ndarray or None
+        Time base of the responses (s).
+    laser_command, laser_timebase : object
+        Not used.
+    """
     nwb_name: str = ""  # name of the nwb file
     protocol: str = ""  # name of the acq4 protocol in this data set
     mode: str = ""  # recording mode
@@ -65,7 +108,28 @@ class acq4_data:  # dataclass to hold the data from a single acq4 protocol
 
 
 class ReadNWB:
+    """Read the protocols of an NWB file written by acq4_to_nwb, and plot them.
+
+    Parameters
+    ----------
+    filename : str or pathlib.Path, optional
+        File to read at once (default: none; use :meth:`readfile`).
+
+    Attributes
+    ----------
+    protocols : dict
+        Protocol name -> :class:`acq4_data`, in recording order.
+    info : dict
+        Session and subject information.
+    """
     def __init__(self, filename: Union[str, Path, None] = None):
+        """Create the reader and, if a file is given, read it.
+
+        Parameters
+        ----------
+        filename : str or pathlib.Path, optional
+            The NWB file.
+        """
         self.protocols = {}
         self.info = {}
         self.fig = None
@@ -76,18 +140,21 @@ class ReadNWB:
             self.readfile(f=filename)
 
     def split_acqname(self, acqname: str):
-        """_summary_
+        """Split an acquisition name into its parts.
+
         acquisition names:
             'Vc_LED_stim_single_000_Ics1_0'
             split to protocol, name, sweep, and get the recording mode from the comments field.
 
-        Params
-        ------
-            acqname (str): acquisition name
+        Parameters
+        ----------
+        acqname : str
+            acquisition name
 
         Returns
         -------
-        Tuple[str, str, str, str]: protocol, sweep, protonum, recmode
+        tuple of str
+            protocol, sweep, name, recording mode
         """
         # print("acqname: ", acqname)
         acqdict = acq_re.match(acqname).groupdict()
@@ -95,18 +162,24 @@ class ReadNWB:
         return acqdict["protocol"], acqdict["sweep"], acqdict["name"], recmode
 
     def split_stimname(self, stimname: str):
-        """_summary_
+        """Split a stimulus name into its parts and classify the stimulus.
+
         stimulus names:
             'Vc_LED_stim_single_000:ChR2 Stimulation, LED 470 nm, sweep=0
             split to protocol, name, sweep, and get the recording mode from the comments field.
 
-        Params
-        ------
-            acqname (str): acquisition name
+        Parameters
+        ----------
+        stimname : str
+            stimulus name
 
         Returns
         -------
-        Tuple[str, str, str, str]: protocol, sweep, protonum, recmode
+        stimdict : dict or None
+            protocol, name, sweep and stimtype ("electrical", "optical" for the separate optical
+            waveforms of older files, or "OptoSeries"); None if the name does not match.
+        recmode : str
+            The recording mode (from the comments field).
         """
         recmode = self.nwbfile.stimulus[stimname].comments
         stim = estim_re.match(stimname)
@@ -131,10 +204,20 @@ class ReadNWB:
         The waveform is held in the OptogeneticSeries (optospot); older files held it
         in a separate '<protocol>:opto_N' stimulus series (optostim).
 
+        Parameters
+        ----------
+        nwbfile : pynwb.NWBFile
+            The open file.
+        optostim : str or None
+            Name of the separate optical waveform series (older files).
+        optospot : str or None
+            Name of the OptogeneticSeries.
+
         Returns
         -------
-        Tuple: waveform (np.ndarray), location (np.ndarray: x, y in microns),
-            and the series holding the waveform; all None if there is no optical stimulus
+        tuple
+            waveform (numpy.ndarray), location (numpy.ndarray: x, y in microns), and the series
+            holding the waveform; all None if there is no optical stimulus.
         """
         if optospot is None:
             return None, None, None
@@ -148,13 +231,10 @@ class ReadNWB:
         (a dict of acq4_data, keyed by protocol name, in the order they were recorded).
         The file is closed after reading; the data are held in memory.
 
-        Params
-        ------
-            f (Union[Path, str, None], optional): File path. Defaults to None.
-
-        Returns
-        -------
-        Nothing
+        Parameters
+        ----------
+        f : str or pathlib.Path
+            File path.
         """
         self.filename = f
         self.protocols = {}
@@ -218,7 +298,19 @@ class ReadNWB:
         self.nwbfile = None  # the file is closed
 
     def get_file_info(self, nwbfile) -> dict:
-        """Get the session and subject information to show with the data"""
+        """Get the session and subject information to show with the data
+
+        Parameters
+        ----------
+        nwbfile : pynwb.NWBFile
+            The open file.
+
+        Returns
+        -------
+        dict
+            session_id, session_start, session_description, notes, and the subject's id, age, sex,
+            weight, genotype and description if there is a subject.
+        """
         info = {
             "session_id": nwbfile.session_id,
             "session_start": str(nwbfile.session_start_time),
@@ -250,16 +342,22 @@ class ReadNWB:
     ):
         """Read the data for one protocol into an acq4_data object
 
-        Params
-        ------
-            nwbfile: the open NWB file
-            protocol_name (str): the acq4 protocol name
-            acquisitions (list): the acquisition names for this protocol, in sweep order
-            e_stimdict, o_stimdict, o_spotdict (dict): stimulus names, keyed by (protocol, sweep)
+        Parameters
+        ----------
+        nwbfile : pynwb.NWBFile
+            the open NWB file
+        protocol_name : str
+            the acq4 protocol name
+        acquisitions : list of str
+            the acquisition names for this protocol, in sweep order
+        e_stimdict, o_stimdict, o_spotdict : dict
+            electrical stimulus, optical waveform and OptogeneticSeries names, keyed by
+            (protocol, sweep)
 
         Returns
         -------
         acq4_data
+            The protocol's data.
         """
         first = nwbfile.acquisition[acquisitions[0]]
         protocol = acq4_data(
@@ -300,7 +398,13 @@ class ReadNWB:
         return protocol
 
     def onpick(self, event):
-        """Show the trace for the stimulus spot that was clicked in the map"""
+        """Show the trace for the stimulus spot that was clicked in the map
+
+        Parameters
+        ----------
+        event : matplotlib.backend_bases.PickEvent
+            The pick event (``event.ind`` holds the spot index).
+        """
         index = int(event.ind[0])
         self.trace_plot[0].set_ydata(self.response[index])
         self.ELabel.set_text(f"Trace {index:d}")
@@ -317,15 +421,25 @@ class ReadNWB:
     ):
         """Minimal plotter to show the data in an nwb file generated by acq4_to_nwb.py
 
-        Params
-        ------
-            protocol (acq4_data): the protocol to plot
-            fig (matplotlib Figure, optional): the figure to draw into (it is cleared first).
-                If None, a new figure is made.
+        Panels: stacked responses (A), commands (B), optical stimuli (C), a map of the stimulus
+        positions coloured by the response in the 20 ms after the light onset (D; click a spot to
+        show its trace in E), one trace (E) and the mean response (F).
+
+        Parameters
+        ----------
+        protocol : acq4_data
+            the protocol to plot
+        fig : matplotlib.figure.Figure, optional
+            the figure to draw into (it is cleared first). If None, a new figure is made.
+        nprotocols : int, optional
+            Number of protocols in the file, for the title (default 1).
+        protocol_number : int, optional
+            Number of this protocol, for the title (default 1).
 
         Returns
         -------
-        the matplotlib Figure
+        matplotlib.figure.Figure
+            The figure.
         """
         if fig is None:
             fig = mpl.figure(figsize=(8, 10), layout="constrained")
@@ -427,6 +541,9 @@ class ReadNWB:
 
 def main():
 
+    """Command line entry point (``display_nwb <file>``): show each protocol in turn, one window
+    per protocol.
+    """
     parser = argparse.ArgumentParser(description="Display an NWB file")
     parser.add_argument(dest="inputfile", type=str, help="input filename")
     args = parser.parse_args()

@@ -17,12 +17,44 @@ from nwbinspector import inspect_all, inspect_nwb
 AR = acq4_reader.Acq4Read()
 
 class EvalImages():
+    """Report the sizes and objectives of the TIFF images in a directory tree.
+
+    For each directory with images, prints each image's shape, objective, position and scale
+    (from the .index file), then the image sizes and objectives found there. Runs when it is
+    constructed.
+
+    Parameters
+    ----------
+    topdir : pathlib.Path
+        The top directory.
+
+    Raises
+    ------
+    ValueError
+        If topdir is not a directory.
+    """
     def __init__(self, topdir:Path):
+        """Examine the images under topdir.
+
+        Parameters
+        ----------
+        topdir : pathlib.Path
+            The top directory.
+        """
         if not topdir.is_dir():
             raise ValueError("Input path is not a directory")
         self.recurse_dirs(topdir, evalfunc=self.examine_image)
 
     def recurse_dirs(self, directory, evalfunc:object):
+        """Examine the images in a directory, then in each of its subdirectories.
+
+        Parameters
+        ----------
+        directory : str or pathlib.Path
+            The directory.
+        evalfunc : callable
+            Passed on to the subdirectories (the images are read with :meth:`examine_image`).
+        """
         pdir = Path(directory)
         if pdir.is_dir():
             # print("dir: ", pdir)
@@ -63,6 +95,20 @@ class EvalImages():
                     self.recurse_dirs(d, evalfunc)
 
     def examine_image(self, filename):
+        """Read a TIFF image and return its name and shape.
+
+        Parameters
+        ----------
+        filename : pathlib.Path
+            The image file.
+
+        Returns
+        -------
+        name : str
+            The file name.
+        shape : tuple of int
+            The image shape.
+        """
         with open(filename, 'rb') as fh:
             tif = tifffile.imread(fh)
         return  filename.name, tif.shape

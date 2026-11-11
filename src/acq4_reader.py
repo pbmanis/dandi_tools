@@ -33,26 +33,41 @@ pp = pprint.PrettyPrinter(indent=4)
 
 
 class acq4_reader:
-    """
-    Provides methods to read an acq4 protocol directory
+    """Provides methods to read an acq4 protocol directory
     including data and .index files
+
+    An acq4 protocol directory holds one subdirectory per sweep (``000``, ``001``, ...), each with
+    a MetaArray file per device (e.g. ``MultiClamp1.ma``), and ``.index`` files with the metadata
+    of the protocol and of each sweep. Typical use::
+
+        reader = acq4_reader(protocol_dir)
+        if reader.getData():
+            traces, commands = reader.traces, reader.cmd_wave
+
+    Parameters
+    ----------
+    pathtoprotocol : str or pathlib.Path, optional
+        The protocol directory.
+    dataname : str, optional
+        Name of the clamp data file (default "MultiClamp1.ma").
     """
 
     def __init__(
         self, pathtoprotocol: Union[Path, str, None] = None, dataname: Union[str, None] = None
     ) -> None:
-        """
+        """Set up the reader and the list of known clamp devices.
+
         Parameters
         ----------
-        pathtoprotocol str or Path (default: None)
+        pathtoprotocol : str or Path (default: None)
             Path to the protocol directory to set for this instance of the reader
 
-        dataname: str (default: None)
+        dataname : str (default: None)
             Name of the data file to read (for example, 'MultiClamp1.ma')
 
         Returns
         -------
-        Nothing
+        None
         """
         self.protocol = None
         self.last_protocol = None  # to keep from having to look for subdirs many times.
@@ -99,9 +114,23 @@ class acq4_reader:
         self.error_info = None  # additional information about errors.
 
     def __enter__(self):
+        """Enter a ``with`` block.
+
+        Returns
+        -------
+        acq4_reader
+            self.
+        """
         return self
 
     def __exit__(self, type, value, traceback):
+        """Leave a ``with`` block: delete the data held by the reader and collect garbage.
+
+        Parameters
+        ----------
+        type, value, traceback
+            The exception, if any (not used).
+        """
         del self.time_base
         del self.traces
         del self.data_array
@@ -114,7 +143,8 @@ class acq4_reader:
         gc.collect()
 
     def setImportant(self, flag: bool = False) -> None:
-        """
+        """Set whether the "important" flags of the traces are used.
+
         Parameters
         ----------
         flag : bool (default: False)
@@ -125,43 +155,58 @@ class acq4_reader:
         CP.cprint("r", f"Important' flag was set: {flag:b}")
 
     def setProtocol(self, pathtoprotocol: Union[str, Path, None] = None) -> None:
-        """
+        """Set the protocol directory to read.
+
         Parameters
         ----------
-        pathtoprotocol str or Path (default: None)
+        pathtoprotocol : str or Path (default: None)
             Path to the protocol directory to set for this instance of the reader
 
         Returns
         -------
-        Nothing
+        None
         """
         self.protocol = pathtoprotocol
 
     def set_pre_process(self, LPF: Union[None, float] = None, Notch: Union[None, list] = None):
+        """Set the filters applied to the traces when they are read.
+
+        Parameters
+        ----------
+        LPF : float or None, optional
+            Low-pass filter corner frequency (Hz), or None for no low-pass filter.
+        Notch : list of float or None, optional
+            Frequencies (Hz) to notch out.
+        """
         self.pre_process_filters["LPF"] = LPF
         self.pre_process_filters["Notch"] = Notch
 
     def setDataName(self, dataname: Union[str, Path]) -> None:
-        """
-        Set the type (name) of the data metaarray name that will be read
+        """Set the type (name) of the data metaarray name that will be read
+
         Parameters
         ----------
+        dataname : str or pathlib.Path
+            The data file name, e.g. "MultiClamp1.ma" or "Clamp1.ma"; its stem is also kept
+            (``shortdname``) as the device name.
         """
         self.dataname = dataname
         self.shortdname = str(Path(self.dataname).stem)
 
     def subDirs(self, p: Union[str, Path]) -> List:
-        """
-        return a list of the subdirectories just below this path
+        """return a list of the subdirectories just below this path
+
+        The result for the last path is cached.
 
         Parameters
         ----------
-        p : str  or path (no default)
+        p : str or path (no default)
             path to investigate
 
         Returns
         -------
-        Sorted list of the directories in the path
+        list of pathlib.Path
+            Sorted list of the directories in the path
         """
         p = Path(p)  # convert if not already
         if self.last_protocol == p:
@@ -183,22 +228,22 @@ class acq4_reader:
     def checkProtocol(
         self, protocolpath: Union[str, Path, None] = None, allow_partial=False
     ) -> bool:
-        """
-        Check the protocol to see if the data is complete
+        """Check the protocol to see if the data is complete
 
         Parameters
         ----------
-        protocolpath: str or path (no default)
+        protocolpath : str or path (no default)
+            The protocol directory (default: the current protocol).
 
-        allow_partial: bool (default: False)
+        allow_partial : bool (default: False)
             If True, allow incomplete protocols (use all available data)
             Empty protocols and protocols with no .index file will still return False
             If False, incomplete protocols will still return false
 
         Returns
         -------
-        Boolean for protocol data found (True) or not found/incomplete (False)
-
+        bool
+            Boolean for protocol data found (True) or not found/incomplete (False)
         """
         if protocolpath is None:
             protocolpath = self.protocol
@@ -247,10 +292,23 @@ class acq4_reader:
         return True
 
     def checkProtocolImportantFlags(self, protocolpath: Union[str, Path, None] = None) -> bool:
-        """
-        Check the protocol directory to see what "important" flags might be set or not
+        """Check the protocol directory to see what "important" flags might be set or not
         for individual traces
         Return a dict of the traces that are "important"
+
+        The dict is stored in ``self.important`` (sweep directory name -> True). If no sweep is
+        marked, or the important flag is not in use, all sweeps are marked.
+
+        Parameters
+        ----------
+        protocolpath : str or pathlib.Path, optional
+            The protocol directory (default: the current protocol).
+
+        Returns
+        -------
+        bool
+            True if the protocol could be checked, False if it has no .index, no devices or no clamp
+            device.
         """
 
         important = {}
@@ -311,7 +369,23 @@ class acq4_reader:
         return True
 
     def listSequenceParams(self, dh):
-        """Given a directory handle for a protocol sequence, return the dict of sequence parameters"""
+        """Given a directory handle for a protocol sequence, return the dict of sequence parameters
+
+        Parameters
+        ----------
+        dh : DirHandle
+            An acq4 directory handle.
+
+        Returns
+        -------
+        dict
+            The sequence parameters.
+
+        Raises
+        ------
+        Exception
+            If the directory is not a protocol sequence (no .index entry).
+        """
         try:
             return dh.info()["sequenceParams"]
         except KeyError:
@@ -325,6 +399,20 @@ class acq4_reader:
                 )
 
     def getIndex(self, currdir: Union[str, Path, None] = None, lineend: str = "\n"):
+        """Read the .index file of a directory and return the entry for the directory itself.
+
+        Parameters
+        ----------
+        currdir : str or pathlib.Path, optional
+            The directory (default: the current protocol).
+        lineend : str, optional
+            Line break used by the text printouts (default: a newline).
+
+        Returns
+        -------
+        dict or None
+            The "." entry of the .index file.
+        """
         self.lb = lineend  # set line break character
         self._readIndex(currdir=currdir)
         if self._index is not None:
@@ -333,6 +421,23 @@ class acq4_reader:
             return None
 
     def _readIndex(self, currdir: Union[str, Path, None] = None):
+        """Read the .index file of a directory (kept in ``self._index``).
+
+        Parameters
+        ----------
+        currdir : str or pathlib.Path, optional
+            The directory (default: the current protocol).
+
+        Returns
+        -------
+        dict
+            The whole .index file.
+
+        Raises
+        ------
+        FileNotFoundError
+            If the directory has no .index file.
+        """
         self._index = None
         # first try with currdir value, read current protocolSequence directory
         if currdir == None:
@@ -351,6 +456,23 @@ class acq4_reader:
         return self._index
 
     def readDirIndex(self, currdir: Union[str, Path, None] = None):
+        """Read the .index file of a directory (kept in ``self._dirindex``).
+
+        Parameters
+        ----------
+        currdir : str or pathlib.Path
+            The directory.
+
+        Returns
+        -------
+        dict or None
+            The whole .index file, or None if it could not be parsed.
+
+        Raises
+        ------
+        FileNotFoundError
+            If the directory has no .index file.
+        """
         self._dirindex = None
         indexFile = Path(currdir, ".index")
         if not indexFile.is_file():
@@ -372,6 +494,18 @@ class acq4_reader:
         return self._dirindex
 
     def _parse_timestamp(self, lstr: str):
+        """Read a ``__timestamp__`` line of an .index file.
+
+        Parameters
+        ----------
+        lstr : str
+            A line of text.
+
+        Returns
+        -------
+        str or None
+            The time as "YYYY-mm-dd  HH:MM:SS", or None if the line is not a timestamp.
+        """
         tstamp = None
         ts = self.tstamp.match(lstr)
         if ts is not None:
@@ -380,12 +514,36 @@ class acq4_reader:
         return tstamp
 
     def convert_timestamp(self, fts: datetime.datetime.timestamp) -> str:
+        """Format a timestamp (seconds since the epoch, local time).
+
+        Parameters
+        ----------
+        fts : float
+            The timestamp.
+
+        Returns
+        -------
+        str
+            The time as "YYYY-mm-dd  HH:MM:SS".
+        """
         tstamp = datetime.datetime.fromtimestamp(fts).strftime("%Y-%m-%d  %H:%M:%S %z")
         return tstamp
 
     def _parse_index(self, index: Union[list, tuple, dict, bytes]):
-        """
-        Recursive version
+        """Recursive version
+
+        Walks an .index structure, appending a readable description of it to ``self.textline``
+        (indented by ``self.indent``); byte strings are decoded.
+
+        Parameters
+        ----------
+        index : list, tuple, dict or bytes
+            The structure (or part of it).
+
+        Returns
+        -------
+        object
+            The structure, with byte strings decoded.
         """
         self.indent += 1
         if isinstance(index, list):
@@ -454,8 +612,14 @@ class acq4_reader:
         return index
 
     def printIndex(self, index: Union[list, tuple, dict, bytes]):
-        """
-        Generate a nice printout of the index, about as far down as we can go
+        """Generate a nice printout of the index, about as far down as we can go
+
+        The text is left in ``self.textline`` (see :meth:`getIndex_text`).
+
+        Parameters
+        ----------
+        index : list, tuple, dict or bytes
+            The .index structure.
         """
         self.indent = 0
         self.textline = ""
@@ -463,8 +627,17 @@ class acq4_reader:
         return
 
     def getIndex_text(self, index: Union[list, tuple, dict, bytes]):
-        """
-        Generate a nice printout of the index, about as far down as we can go
+        """Generate a nice printout of the index, about as far down as we can go
+
+        Parameters
+        ----------
+        index : list, tuple, dict or bytes
+            The .index structure.
+
+        Returns
+        -------
+        str
+            The printout.
         """
         self.indent = 0
         self.textline = ""
@@ -484,10 +657,19 @@ class acq4_reader:
         #                             print( '    [', k, '][', k2, '][', k3, '][', k4, '] ::::  ', index['.'][k][k2][k3][k4])
 
     def file_cell_protocol(self, filename: Union[str, Path, None] = None) -> tuple:
-        """
-        file_cell_protocol breaks the current filename down and returns a
+        """file_cell_protocol breaks the current filename down and returns a
         tuple: (date, cell, protocol)
         last argument returned is the rest of the path...
+
+        Parameters
+        ----------
+        filename : str or pathlib.Path
+            A protocol directory, .../date/slice/cell/protocol.
+
+        Returns
+        -------
+        tuple
+            (date, slice, cell, protocol, the path above the date).
         """
         assert filename is not None
         filename = Path(filename)
@@ -500,13 +682,20 @@ class acq4_reader:
     def getClampDevices(
         self, currdir: Union[str, Path, None] = None, verbose: bool = False
     ) -> dict:
-        """
-        Search for a known clamp device in the list of devices
+        """Search for a known clamp device in the list of devices
         used in the current protocol directory...
 
-        Return
-        ------
-        list of valid clamp devices found (there may be more than one)
+        Parameters
+        ----------
+        currdir : str or pathlib.Path
+            The protocol directory.
+        verbose : bool, optional
+            Print the devices (default False).
+
+        Returns
+        -------
+        list of str
+            list of valid clamp devices found (there may be more than one)
             List will be empty if no recognized device is found.
         """
         assert currdir is not None
@@ -522,8 +711,20 @@ class acq4_reader:
         return devs
 
     def getDataInfo(self, filename: Union[str, Path, None] = None, silent: bool = False):
-        """
-        Get the index info for a record, without reading the trace data
+        """Get the index info for a record, without reading the trace data
+
+        Parameters
+        ----------
+        filename : str or pathlib.Path
+            A clamp data file (.ma).
+        silent : bool, optional
+            Not used.
+
+        Returns
+        -------
+        list or None
+            The MetaArray info of the first channel, or None if the file does not exist or cannot be
+            parsed.
         """
         import warnings
         assert filename is not None
@@ -546,9 +747,15 @@ class acq4_reader:
         return info
     
     def parseClampInfo(self, info: list):
-        """
-        Get important information from the info[1] directory that we can use
+        """Get important information from the info[1] directory that we can use
         to determine the acquisition type and channel order
+
+        Sets the trace indices and ``samp_rate``.
+
+        Parameters
+        ----------
+        info : list
+            MetaArray info from :meth:`getDataInfo`.
         """
         self.trClampInfo = info
         # print("switchchan: ", switchchan)
@@ -633,9 +840,19 @@ class acq4_reader:
         # CP.cprint("r", f"parseclampinfo, mode = {self.mode:s}")
 
     def parseClampWCCompSettings(self, info: list) -> dict:
-        """
-        Given the .index file for this protocol dir, try to parse the
+        """Given the .index file for this protocol dir, try to parse the
         clamp state and compensation
+
+        Parameters
+        ----------
+        info : list
+            MetaArray info of a clamp data file.
+
+        Returns
+        -------
+        dict
+            Whole-cell and series-resistance compensation settings; "WCCompValid" is False (with
+            default values) if the clamp state is not recorded.
         """
         d = {}
         if "ClampState" in info[1].keys() and "ClampParams" in info[1]["ClampState"].keys():
@@ -662,6 +879,19 @@ class acq4_reader:
             }
 
     def parseClampCCCompSettings(self, info: list) -> dict:
+        """Get the current-clamp compensation settings (bridge balance, capacitance neutralization).
+
+        Parameters
+        ----------
+        info : list
+            MetaArray info of a clamp data file.
+
+        Returns
+        -------
+        dict
+            The settings; "CCCompValid" is False (with default values) if the clamp state is not
+            recorded.
+        """
         d = {}
         if "ClampState" in info[1].keys() and "ClampParams" in info[1]["ClampState"].keys():
             par = info[1]["ClampState"]["ClampParams"]
@@ -685,9 +915,18 @@ class acq4_reader:
             }
 
     def parseClampHoldingLevel(self, info: list):  # -> Union[float, list]:
-        """
-        Given the .index file for a protocol dir, try to get
+        """Given the .index file for a protocol dir, try to get
         the holding level from the clamp state
+
+        Parameters
+        ----------
+        info : list
+            MetaArray info of a clamp data file.
+
+        Returns
+        -------
+        float
+            The holding level (V or A), or 0.0 if it is not recorded.
         """
         try:
             return info[1]["ClampState"]["holding"]
@@ -695,6 +934,18 @@ class acq4_reader:
             return 0.0
 
     def _getImportant(self, info: Union[int, dict]):
+        """The "important" flag in an .index entry.
+
+        Parameters
+        ----------
+        info : dict or None
+            The entry.
+
+        Returns
+        -------
+        bool
+            The flag, False if it is not set.
+        """
         if info is None:
             important = False
             return important
@@ -706,8 +957,17 @@ class acq4_reader:
         return important
 
     def checkProtocolImportant(self, protocol):
-        """
-        Check the *protocol dir* to see if the protocol is marked as "important"
+        """Check the *protocol dir* to see if the protocol is marked as "important"
+
+        Parameters
+        ----------
+        protocol : str or pathlib.Path
+            The protocol directory (it becomes the current protocol).
+
+        Returns
+        -------
+        bool
+            The flag.
         """
         self.setProtocol(protocol)
         self.info = self.getIndex(self.protocol)  # self.protocol)
@@ -723,8 +983,7 @@ class acq4_reader:
         downsample: int = 1,
         silent: bool = True,
     ):
-        """
-        Get the data for the current protocol
+        """Get the data for the current protocol
         if check is True, we just check that the requested file exists and return
         True if it does and false if it does not
         if allow_partial is true, we get as much data as we can even if the protocol
@@ -743,8 +1002,31 @@ class acq4_reader:
         3. The protocol directory is empty
         4. The selected device (e.g., Multiclamp1) is not found in the protocol
         5. The protocol is not managed (no .index file found)
-        6. 
 
+        The data are stored in the reader: ``traces`` and ``cmd_wave`` (MetaArrays, sweeps x time),
+        ``data_array``, ``time_base``, ``sample_rate``, ``values`` and ``commandLevels`` (the
+        command steps), ``repetitions``, ``tstart`` and ``tend`` (the command pulse), ``mode`` (the
+        clamp mode), and ``error_info`` (a description of the failure, if any).
+
+        Parameters
+        ----------
+        pos : int, optional
+            Not used (default 1).
+        check : bool, optional
+            Only check that the data exist (default False).
+        allow_partial : bool, optional
+            Read what there is of an incomplete protocol (default False).
+        record_list : list of int, optional
+            Records to read (needs allow_partial).
+        downsample : int, optional
+            Downsampling factor (default 1: none).
+        silent : bool, optional
+            Fewer messages (default True).
+
+        Returns
+        -------
+        bool
+            True on success, False on failure.
         """
         # non threaded
         # CP.cprint('c', 'GETDATA ****')
@@ -1114,6 +1396,18 @@ class acq4_reader:
         """Returns the command data from a clamp MetaArray.
         If there was no command specified, the function will
         return all zeros if generateEmpty=True (default).
+
+        Parameters
+        ----------
+        data : MetaArray
+            Clamp data with a "Channel" axis.
+        generateEmpty : bool, optional
+            Return zeros (with units from the clamp mode) if there is no command (default True).
+
+        Returns
+        -------
+        MetaArray or None
+            The command.
         """
 
         if data.hasColumn("Channel", "Command"):  # hascolumn is a metaarray method
@@ -1139,6 +1433,18 @@ class acq4_reader:
         return None
 
     def getStim(self, stimname: str = "Stim") -> dict:
+        """Pulse times of a stimulus device, from the protocol's .index.
+
+        Parameters
+        ----------
+        stimname : str, optional
+            The device (default "Stim").
+
+        Returns
+        -------
+        dict
+            Pulse times (see :meth:`_getPulses`).
+        """
         supindex = self._readIndex(currdir=self.protocol)
         # print(supindex["."]["devices"].keys())
         if supindex is None:
@@ -1150,8 +1456,19 @@ class acq4_reader:
         return self._getPulses(stimuli)
 
     def getLaserBlueTimes(self) -> dict:
-        """
-        Get laser pulse times  - handling multiple possible configurations (ugly)
+        """Get laser pulse times  - handling multiple possible configurations (ugly)
+
+        The times go to ``self.LaserBlueTimes`` (see :meth:`_getPulses`).
+
+        Returns
+        -------
+        bool
+            True if found; False if there is no "Laser-Blue-raw" device.
+
+        Raises
+        ------
+        ValueError
+            If the .index cannot be read or the pulse channel cannot be found.
         """
         supindex = self._readIndex(currdir=self.protocol)
         if supindex is None:
@@ -1177,10 +1494,16 @@ class acq4_reader:
         return True
 
     def getLEDCommand(self) -> bool:
-        """
-        Get LED pulse times
+        """Get LED pulse times
         Note: In some early recordings, this was used with the laser driver, so the name
         might be "Laser-Blue-raw" instead of "LED-Blue"
+
+        The waveforms go to ``LED_Raw``, ``LED_time_base`` and ``LED_sample_rate``.
+
+        Returns
+        -------
+        bool
+            True if the LED data were read.
         """
         dirs = self.subDirs(self.protocol)
 
@@ -1281,6 +1604,23 @@ class acq4_reader:
         return True
 
     def _getPulses(self, stimuli: dict) -> dict:
+        """Pulse times from the stimuli of a waveGeneratorWidget.
+
+        Parameters
+        ----------
+        stimuli : dict
+            The "stimuli" entry of the widget ("PulseTrain" or "Pulse").
+
+        Returns
+        -------
+        dict
+            start, duration and amplitude lists, and for pulse trains npulses, period and type.
+
+        Raises
+        ------
+        ValueError
+            If the stimulus type is not recognized.
+        """
         if "PulseTrain" in stimuli.keys():
             times = {}
             times["start"] = []
@@ -1345,8 +1685,7 @@ class acq4_reader:
         devicename="Photodiode",
         allow_partial=False,
     ) -> Union[dict, None]:
-        """
-        Get the data from a device
+        """Get the data from a device
 
         Parameters
         ----------
@@ -1356,15 +1695,14 @@ class acq4_reader:
         devicename : str (default: 'Photodiode')
             The name of the device as set in the config (might be 'pCell', etc)
             This might or might not be the same as the device
-        allow_partial: bool (default: False)
+        allow_partial : bool (default: False)
             return true even with partial information returned.
 
         Returns
         -------
-        Success : dict
-        failure: None
-
-        The results are stored data for the current protocol
+        dict or None
+            Success: dict with data, time_base and sample_rate; failure: None.
+            The results are stored data for the current protocol
         """
         # non threaded
         dirs = self.subDirs(self.protocol)
@@ -1413,9 +1751,16 @@ class acq4_reader:
         }
 
     def getLaserBlueCommand(self) -> bool:
-        """
-        Get the command waveform for the blue laser
+        """Get the command waveform for the blue laser
         data for the current protocol
+
+        The waveforms go to ``LaserBlue_Raw``, ``LaserBlue_pCell``, ``LaserBlue_time_base`` and
+        ``LaserBlue_sample_rate``, and the pulse times to ``LaserBlue_times``.
+
+        Returns
+        -------
+        bool
+            True if the data were read.
         """
         # non threaded
         dirs = self.subDirs(self.protocol)
@@ -1475,9 +1820,16 @@ class acq4_reader:
         return True
 
     def getPhotodiode(self) -> bool:
-        """
-        Get the command waveform for the blue laser
+        """Get the command waveform for the blue laser
         data for the current protocol
+
+        (This reads the photodiode signal, ``Photodiode.ma``, of each sweep.) The data go to
+        ``Photodiode``, ``Photodiode_time_base`` and ``Photodiode_sample_rate``.
+
+        Returns
+        -------
+        bool
+            True if the data were read, False if a sweep has no photodiode file.
         """
         # non threaded
         dirs = self.subDirs(self.protocol)
@@ -1515,6 +1867,22 @@ class acq4_reader:
     def _getWaveGeneratorWidget(
         self, parent_device: str = "", channels: str = None, device: str = None
     ):
+        """Pulse start, duration and type from a device's waveGeneratorWidget.
+
+        Parameters
+        ----------
+        parent_device : str
+            The device in the protocol's .index.
+        channels : str, optional
+            The key of its channels ("channels").
+        device : str, optional
+            The channel.
+
+        Returns
+        -------
+        dict
+            start, duration and type of the pulse.
+        """
         supindex = self._readIndex()
         if channels is not None and device is not None:
             stimuli = supindex["."]["devices"][parent_device][channels][device][
@@ -1532,6 +1900,13 @@ class acq4_reader:
         return waveinfo
 
     def getLaserBlueShutter(self) -> dict:
+        """Shutter pulse of the blue laser.
+
+        Returns
+        -------
+        dict
+            start, duration and type (see :meth:`_getWaveGeneratorWidget`).
+        """
         shutter = self._getWaveGeneratorWidget(
             parent_device="Laser-Blue-raw", channels="channels", device="Shutter"
         )
@@ -1548,6 +1923,21 @@ class acq4_reader:
         # return shutter
     
     def getScannerPositions(self, dataname: str = "Laser-Blue-raw.ma") -> bool:
+        """Read the scanner (laser spot) position of each sweep of a mapping protocol.
+
+        The positions go to ``scanner_positions`` (sweeps x 2, m), with ``scanner_targets``,
+        ``scanner_info``, ``scanner_spotsize`` and the camera outline ``scanner_camera``.
+
+        Parameters
+        ----------
+        dataname : str, optional
+            The laser data file in each sweep (default "Laser-Blue-raw.ma").
+
+        Returns
+        -------
+        bool
+            True if the positions were read; False if the protocol has no sequence parameters.
+        """
         dirs = self.subDirs(self.protocol)
         self.scanner_positions = np.zeros((len(dirs), 2))
         self.scanner_camera = {}
@@ -1640,11 +2030,23 @@ class acq4_reader:
         return True  # indicate protocol is all ok
 
     def getImage(self, filename: Union[str, Path, None] = None) -> dict:
-        """
-        getImage
+        """getImage
         Returns the image file in the dataname
         Requires full path to the data
         Can also read a video (.ma) file, returning the stack
+
+        The position (including the userTransform, if any), scale, region and binning from the
+        .index go to ``Image_pos``, ``Image_scale``, ``Image_region`` and ``Image_binning``.
+
+        Parameters
+        ----------
+        filename : str or pathlib.Path
+            The image (.tif) or video (.ma) file.
+
+        Returns
+        -------
+        numpy.ndarray or MetaArray
+            The image or stack.
         """
         assert filename is not None
         filename = Path(filename)
@@ -1679,8 +2081,7 @@ class acq4_reader:
         limit: Union[int, None] = None,
         filter: bool = True,
     ):
-        """
-        Average (or max or std) the images across the scanner camera files
+        """Average (or max or std) the images across the scanner camera files
         the images are collected into a stack prior to any operation
 
         Parameters
@@ -1694,22 +2095,22 @@ class acq4_reader:
             max : compute the max projection across the stack
             std : compute the standard deviation across the stack
 
-        limit : maximum # of images in stack to combine (starting with first)
+        firstonly : boolean (default: False)
+            return the first image only
 
         subtractFlag : boolean (default: False)
-                subtract first frame from second when there are pairs of frames
+            subtract first frame from second when there are pairs of frames
 
-        firstonly : boolean (default: False)
-                return the first image only
+        limit : int, optional
+            maximum # of images in stack to combine (starting with first)
 
         filter : boolean (default: True)
-                Not implemented
-
+            Not implemented
 
         Returns
         -------
+        numpy.ndarray
             a single image frame that is the result of the specified operation
-
         """
         assert mode in ["average", "max", "std"]
         print("average scanner images")
@@ -1793,6 +2194,13 @@ class acq4_reader:
         return resultframe.T  # must transpose to match other data...
 
     def plotClampData(self, all=True):
+        """Plot the traces and commands that were read (for checking).
+
+        Parameters
+        ----------
+        all : bool, optional
+            Plot every trace (default True); False plots the mean.
+        """
         import matplotlib.pyplot as mpl
 
         f, ax = mpl.subplots(2)
@@ -1806,6 +2214,9 @@ class acq4_reader:
 
 
 def one_test():
+    """Development test: read and plot the images and maps of one cell (needs local data and the
+    ``tools.boundrect`` module; not for general use).
+    """
     import tools.boundrect as BR
 
     BRI = BR.BoundRect()

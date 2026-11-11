@@ -33,7 +33,18 @@ FILE_ROLE = QtCore.Qt.ItemDataRole.UserRole
 
 
 def day_of(path: Path) -> str:
-    """The recording day (yyyy.mm.dd) from an NWB file name"""
+    """The recording day (yyyy.mm.dd) from an NWB file name
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        The NWB file, named like ``Name~2021.04.05~S00C00.nwb`` or ``...~2025-07-24~...``.
+
+    Returns
+    -------
+    str
+        The day as yyyy.mm.dd, or "unknown day" if the name has none.
+    """
     daymatch = re_day.search(path.name)
     if daymatch is None:
         return "unknown day"
@@ -43,9 +54,17 @@ def day_of(path: Path) -> str:
 def find_nwb_files(directory: Union[str, Path]) -> dict:
     """Find the NWB files in a directory and its subdirectories
 
-    Returns:
-        dict: {day: [files]}, sorted by day and file name
-        int: the number of entries that are not readable files (e.g., broken links)
+    Parameters
+    ----------
+    directory : str or pathlib.Path
+        The directory to search.
+
+    Returns
+    -------
+    days : dict
+        {day: [files]}, sorted by day and file name
+    missing : int
+        the number of entries that are not readable files (e.g., broken links)
     """
     days = {}
     missing = 0
@@ -58,7 +77,25 @@ def find_nwb_files(directory: Union[str, Path]) -> dict:
 
 
 class BrowseNWB(QtWidgets.QMainWindow):
+    """Main window: the NWB files of a directory by day and cell, and a plot of one protocol.
+
+    The left side lists the days and the files (cells) of each day, with information about the
+    selected file; the right side plots one protocol with :meth:`src.display_nwb.ReadNWB.plot_traces`.
+    Buttons and keys step through the protocols, files and days (see the module docstring).
+
+    Parameters
+    ----------
+    directory : str or pathlib.Path, optional
+        Directory to show at start (default: none; choose one with the button).
+    """
     def __init__(self, directory: Union[str, Path, None] = None):
+        """Build the window and, if a directory is given, load it.
+
+        Parameters
+        ----------
+        directory : str or pathlib.Path, optional
+            Directory to show at start.
+        """
         super().__init__()
         self.setWindowTitle("NWB browser")
         self.directory = None
@@ -123,6 +160,7 @@ class BrowseNWB(QtWidgets.QMainWindow):
             self.load_directory(directory)
 
     def choose_directory(self):
+        """Ask for a directory (file dialog) and load it."""
         start = str(self.directory) if self.directory is not None else str(Path.cwd())
         directory = QtWidgets.QFileDialog.getExistingDirectory(
             self, "Choose a directory of NWB files", start
@@ -131,7 +169,13 @@ class BrowseNWB(QtWidgets.QMainWindow):
             self.load_directory(directory)
 
     def load_directory(self, directory: Union[str, Path]):
-        """List the NWB files in the directory by day, and show the first one"""
+        """List the NWB files in the directory by day, and show the first one
+
+        Parameters
+        ----------
+        directory : str or pathlib.Path
+            The directory (searched recursively).
+        """
         self.directory = Path(directory)
         self.days, missing = find_nwb_files(self.directory)
         self.files = [f for files in self.days.values() for f in files]
@@ -166,7 +210,18 @@ class BrowseNWB(QtWidgets.QMainWindow):
             self.canvas.draw_idle()
 
     def file_item(self, f: Path):
-        """The tree item for a file"""
+        """The tree item for a file
+
+        Parameters
+        ----------
+        f : pathlib.Path
+            An NWB file in the list.
+
+        Returns
+        -------
+        QtWidgets.QTreeWidgetItem or None
+            The item, or None if the file is not in the tree.
+        """
         for i in range(self.tree.topLevelItemCount()):
             day_item = self.tree.topLevelItem(i)
             for j in range(day_item.childCount()):
@@ -175,11 +230,27 @@ class BrowseNWB(QtWidgets.QMainWindow):
         return None
 
     def select_file(self, f: Path):
+        """Select a file in the tree (which shows it).
+
+        Parameters
+        ----------
+        f : pathlib.Path
+            An NWB file in the list.
+        """
         item = self.file_item(f)
         if item is not None:
             self.tree.setCurrentItem(item)
 
     def on_tree_selection(self, current, previous):
+        """Show the selected file; selecting a day shows its first file.
+
+        Parameters
+        ----------
+        current : QtWidgets.QTreeWidgetItem or None
+            The newly selected item.
+        previous : QtWidgets.QTreeWidgetItem or None
+            The previously selected item (not used).
+        """
         if current is None:
             return
         filename = current.data(0, FILE_ROLE)
@@ -190,7 +261,17 @@ class BrowseNWB(QtWidgets.QMainWindow):
         self.show_file(Path(filename))
 
     def show_file(self, f: Path, protocol_index: int = 0):
-        """Read a file and show one of its protocols"""
+        """Read a file and show one of its protocols
+
+        The file is read only if it is not the current one.
+
+        Parameters
+        ----------
+        f : pathlib.Path
+            The NWB file.
+        protocol_index : int, optional
+            Protocol to show (default 0); negative values count from the end.
+        """
         if f != self.current_file:
             QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.CursorShape.WaitCursor)
             try:
@@ -221,6 +302,18 @@ class BrowseNWB(QtWidgets.QMainWindow):
         self.show_protocol(protocol_index)
 
     def file_info_text(self, f: Path) -> str:
+        """Text describing a file: session and subject information, and its protocols.
+
+        Parameters
+        ----------
+        f : pathlib.Path
+            The current file (already read).
+
+        Returns
+        -------
+        str
+            The text, one item per line.
+        """
         lines = [f.name, ""]
         lines += [f"{key:s}: {value!s}" for key, value in self.reader.info.items()]
         lines += ["", f"{len(self.protocol_names):d} protocols:"]
@@ -231,7 +324,13 @@ class BrowseNWB(QtWidgets.QMainWindow):
         return "\n".join(lines)
 
     def show_protocol(self, index: int):
-        """Plot one protocol of the current file"""
+        """Plot one protocol of the current file
+
+        Parameters
+        ----------
+        index : int
+            Index of the protocol (clipped to the valid range).
+        """
         if self.reader is None or len(self.protocol_names) == 0:
             self.figure.clear()
             self.canvas.draw_idle()
@@ -260,7 +359,13 @@ class BrowseNWB(QtWidgets.QMainWindow):
         self.canvas.draw_idle()
 
     def step_protocol(self, delta: int):
-        """Go to the next/previous protocol, continuing into the next/previous file"""
+        """Go to the next/previous protocol, continuing into the next/previous file
+
+        Parameters
+        ----------
+        delta : int
+            +1 for the next protocol, -1 for the previous one.
+        """
         if self.current_file is None:
             return
         index = self.protocol_index + delta
@@ -270,6 +375,15 @@ class BrowseNWB(QtWidgets.QMainWindow):
             self.step_file(delta, protocol_index=0 if delta > 0 else -1)
 
     def step_file(self, delta: int, protocol_index: int = 0):
+        """Go to the next/previous file in the list.
+
+        Parameters
+        ----------
+        delta : int
+            +1 for the next file, -1 for the previous one.
+        protocol_index : int, optional
+            Protocol to show in that file (default 0; -1 for the last).
+        """
         if self.current_file is None:
             return
         index = self.files.index(self.current_file) + delta
@@ -280,6 +394,13 @@ class BrowseNWB(QtWidgets.QMainWindow):
             self.show_file(self.files[index], protocol_index=protocol_index)
 
     def step_day(self, delta: int):
+        """Go to the first file of the next/previous day.
+
+        Parameters
+        ----------
+        delta : int
+            +1 for the next day, -1 for the previous one.
+        """
         if self.current_file is None:
             return
         days = list(self.days.keys())
@@ -289,6 +410,7 @@ class BrowseNWB(QtWidgets.QMainWindow):
 
 
 def main():
+    """Command line entry point (``browse_nwb [directory]``): open the browser window."""
     parser = argparse.ArgumentParser(description="Browse the NWB files in a directory")
     parser.add_argument(
         dest="directory", type=str, nargs="?", default=None, help="directory of NWB files"
